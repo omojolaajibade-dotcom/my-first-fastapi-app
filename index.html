@@ -1,367 +1,1347 @@
+
 <!DOCTYPE html>
-<html>
+<html lang="en">
+
 <head>
-    <title>Customer Management System</title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <title>Omotech - Login</title>
 
     <style>
+        * {
+            box-sizing: border-box;
+        }
+
         body {
-            font-family: Arial, sans-serif;
-            background: #f4f6f8;
             margin: 0;
-            padding: 40px;
+            font-family: Arial, sans-serif;
+            background: #f4f7fb;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
         }
 
-        .container {
-            max-width: 900px;
-            margin: auto;
+        .login-container {
+            width: 100%;
+            max-width: 420px;
+            padding: 20px;
         }
 
-        h1 {
+        .logo {
             text-align: center;
-            margin-bottom: 30px;
+            margin-bottom: 25px;
+        }
+
+        .logo h1 {
+            margin: 0;
+            font-size: 34px;
+            color: #2563eb;
+        }
+
+        .logo p {
+            margin-top: 8px;
+            color: #666;
         }
 
         .card {
             background: white;
-            padding: 25px;
-            border-radius: 10px;
-            margin-bottom: 25px;
-            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+            padding: 30px;
+            border-radius: 14px;
+            box-shadow: 0 5px 20px rgba(0, 0, 0, 0.08);
         }
 
         h2 {
             margin-top: 0;
+            margin-bottom: 25px;
+            text-align: center;
+            color: #222;
         }
 
         label {
             display: block;
             margin-bottom: 8px;
             font-weight: bold;
+            color: #333;
         }
 
         input {
             width: 100%;
-            padding: 12px;
+            padding: 13px;
             margin-bottom: 18px;
-            border: 1px solid #ccc;
-            border-radius: 6px;
-            box-sizing: border-box;
+            border: 1px solid #d1d5db;
+            border-radius: 8px;
+            font-size: 15px;
+        }
+
+        input:focus {
+            outline: none;
+            border-color: #2563eb;
         }
 
         button {
+            width: 100%;
+            padding: 13px;
             background: #2563eb;
             color: white;
             border: none;
-            padding: 12px 20px;
-            border-radius: 6px;
+            border-radius: 8px;
             cursor: pointer;
             font-size: 16px;
+            font-weight: bold;
         }
 
         button:hover {
             background: #1d4ed8;
         }
 
-        #result {
-            margin-top: 15px;
+        .whatsapp-button {
+    display: block;
+    width: 100%;
+    padding: 13px;
+    margin-top: 12px;
+    background: #25D366;
+    color: white;
+    text-align: center;
+    text-decoration: none;
+    border-radius: 8px;
+    font-size: 16px;
+    font-weight: bold;
+}
+
+.whatsapp-button:hover {
+    background: #1ebe5d;
+}
+
+
+.dashboard-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
+    margin-top: 20px;
+}
+
+.dashboard-grid button {
+    width: 100%;
+    min-height: 48px;
+    padding: 12px 16px;
+    border-radius: 8px;
+    cursor: pointer;
+}
+
+@media (max-width: 480px) {
+    .dashboard-grid {
+        grid-template-columns: 1fr;
+    }
+}
+
+.dashboard-grid button {
+    background: #2563eb;
+}
+
+.dashboard-grid button:hover {
+    background: #1d4ed8;
+}
+
+#welcomeMessage {
+    text-align: center;
+    color: #555;
+    margin-bottom: 20px;
+}
+
+        .secondary-button {
+            background: #6b7280;
+            margin-top: 10px;
+        }
+
+        .secondary-button:hover {
+            background: #4b5563;
+        }
+
+        .link-button {
+            background: none;
+            color: #2563eb;
+            padding: 0;
+            margin-top: 12px;
+            font-size: 14px;
+        }
+
+        .link-button:hover {
+            background: none;
+            color: #1d4ed8;
+        }
+
+        #result,
+        #resetResult {
+            margin-top: 18px;
+            text-align: center;
             font-weight: bold;
         }
 
-        table {
-            width: 100%;
-            border-collapse: collapse;
+        .hidden {
+            display: none;
         }
 
-        th,
-        td {
+        .token-box {
+            background: #f3f4f6;
             padding: 12px;
-            border-bottom: 1px solid #ddd;
-            text-align: left;
+            border-radius: 8px;
+            margin-top: 15px;
+            word-break: break-all;
+            font-size: 13px;
         }
+        
+.transaction-panel {
+    margin: 24px 0;
+    padding: 24px;
+    background: #ffffff;
+    border: 1px solid #e5e7eb;
+    border-radius: 16px;
+    box-shadow: 0 4px 16px rgba(15, 23, 42, 0.05);
+    color: #172033;
+}
 
-        th {
-            background: #f1f5f9;
-        }
+.transaction-panel h2 {
+    margin: 0 0 8px;
+    font-size: 24px;
+    font-weight: 700;
+}
 
-        @media (max-width: 600px) {
-            body {
-                padding: 20px;            }
+.transaction-subtitle {
+    margin: 0 0 16px;
+    color: #64748b;
+    font-size: 14px;
+}
 
-            .card {
-                padding: 18px;
-            }
-        }
+.transaction-count {
+    margin-bottom: 16px;
+    color: #2563eb;
+    font-size: 14px;
+    font-weight: 600;
+}
+
+.transaction-table-wrapper {
+    width: 100%;
+    overflow-x: auto;
+}
+
+.transaction-table {
+    width: 100%;
+    border-collapse: collapse;
+    text-align: left;
+    font-size: 14px;
+}
+
+.transaction-table th {
+    padding: 14px 12px;
+    background: #f1f5f9;
+    color: #475569;
+    font-weight: 600;
+    white-space: nowrap;
+}
+
+.transaction-table td {
+    padding: 15px 12px;
+    border-bottom: 1px solid #e5e7eb;
+    vertical-align: middle;
+}
+
+.transaction-table tbody tr:hover {
+    background: #f8fafc;
+}
+
+.transaction-amount {
+    font-weight: 700;
+    white-space: nowrap;
+}
+
+.transaction-status {
+    display: inline-block;
+    padding: 5px 10px;
+    border-radius: 20px;
+    font-size: 12px;
+    font-weight: 600;
+    text-transform: capitalize;
+}
+
+.status-success {
+    background: #dcfce7;
+    color: #166534;
+}
+
+.status-other {
+    background: #fef3c7;
+    color: #92400e;
+}
+
+.transaction-reference {
+    max-width: 220px;
+    overflow-wrap: anywhere;
+    color: #64748b;
+    font-size: 12px;
+}
+
+.transaction-empty {
+    padding: 24px 0;
+    color: #64748b;
+}
+
+@media (max-width: 600px) {
+    .transaction-panel {
+        padding: 16px;
+        border-radius: 12px;
+    }
+
+    .transaction-panel h2 {
+        font-size: 21px;
+    }
+
+    .transaction-table {
+        font-size: 12px;
+    }
+
+    .transaction-table th,
+    .transaction-table td {
+        padding: 12px 8px;
+    }
+}
+
     </style>
 </head>
 
 <body>
 
-    <div class="container">
+    <div class="login-container">
 
-        <h1>Customer Management System</h1>
+        <div class="logo">
+            <h1>Omotech</h1>
+            <p>Airtime & Data</p>
+        </div>
 
-        <div class="card">
 
-            <h2>Add Customer</h2>
+        <!-- LOGIN CARD -->
 
-            <label for="name">Customer Name</label>
+        <div class="card" id="loginCard">
 
-            <input
-                type="text"
-                id="name"
-                placeholder="Enter customer name"
-            >
+            <h2>Welcome Back</h2>
 
-            <label for="service">Service</label>
+            <label for="phone">Phone Number</label>
 
             <input
                 type="text"
-                id="service"
-                placeholder="Enter service requested"
+                id="phone"
+                placeholder="Enter your phone number"
             >
 
-            <button onclick="sendCustomer()">
-                Add Customer
+            <label for="password">Password</label>
+
+            <input
+                type="password"
+                id="password"
+                placeholder="Enter your password"
+            >
+
+            <button onclick="login()">
+                Login
             </button>
+
+            <button
+                class="link-button"
+                onclick="showForgotPassword()"
+            >
+                Forgot Password?
+            </button>
+
+            <button class="link-button" onclick="showSignUp()">Don't have an account? Sign up</button>
 
             <p id="result"></p>
 
         </div>
+    
+        <a
+    href="https://wa.me/2348162879275"
+    target="_blank"
+    class="whatsapp-button"
+>
+    Contact Us on WhatsApp
+</a>
 
 
-        <div class="card">
 
-            <h2>Customers</h2>
+        <!-- FORGOT PASSWORD CARD -->
+
+        <div class="card hidden" id="forgotCard">
+
+            <h2>Forgot Password</h2>
+
+            <label for="forgotPhone">Phone Number</label>
 
             <input
                 type="text"
-                id="search"
-                placeholder="Search customer by name..."
-                onkeyup="searchCustomers()"
+                id="forgotPhone"
+                placeholder="Enter your phone number"
             >
 
-            <table>
+            <button onclick="requestReset()">
+                Get Reset Token
+            </button>
 
-                <thead>
-                    <tr>
-    <th>ID</th>
-    <th>Name</th>
-    <th>Service</th>
-    <th>Action</th>
-</tr>
-                </thead>
+            <button
+                class="secondary-button"
+                onclick="showLogin()"
+            >
+                Back to Login
+            </button>
 
-                <tbody id="customerTable">
-                </tbody>
+            <p id="forgotResult"></p>
 
-            </table>
+            <div
+                id="tokenBox"
+                class="token-box hidden"
+            ></div>
+
+            <button
+                id="continueResetButton"
+                class="hidden"
+                onclick="showResetPassword()"
+            >
+                Continue to Reset Password
+            </button>
+
+        </div>
+
+
+        <!-- RESET PASSWORD CARD -->
+
+        <div class="card hidden" id="resetCard">
+
+            <h2>Reset Password</h2>
+
+            <label for="resetPhone">Phone Number</label>
+
+            <input
+                type="text"
+                id="resetPhone"
+                placeholder="Enter your phone number"
+            >
+
+            <label for="resetToken">Reset Token</label>
+
+            <input
+                type="text"
+                id="resetToken"
+                placeholder="Enter your reset token"
+            >
+
+            <label for="newPassword">New Password</label>
+
+            <input
+                type="password"
+                id="newPassword"
+                placeholder="Enter your new password"
+            >
+
+            <button onclick="resetPassword()">
+                Reset Password
+            </button>
+
+            <button
+                class="secondary-button"
+                onclick="showLogin()"
+            >
+                Back to Login
+            </button>
+
+            <p id="resetResult"></p>
 
         </div>
 
     </div>
 
+    <div class="card hidden" id="signupCard">
+    <h2>Create Account</h2>
 
+    <label for="signupName">Full Name</label>
+    <input type="text" id="signupName" placeholder="Enter your full name">
+
+    <label for="signupPhone">Phone Number</label>
+    <input type="text" id="signupPhone" placeholder="Enter your phone number">
+
+    <label for="signupPassword">Password</label>
+    <input type="password" id="signupPassword" placeholder="Create a password">
+
+    <button onclick="signup()">Create Account</button>
+
+    <button class="secondary-button" onclick="showLogin()">Back to Login</button>
+
+    <p id="signupResult"></p>
+</div>
+<div class="card hidden" id="dashboardCard">
+    <h2>Welcome to Omotech</h2>
+
+    <p id="welcomeMessage"></p>
+
+    
+<div class="dashboard-grid">
+
+   <button type="button" onclick="showAirtime()">Airtime</button>
+
+    <button type="button"
+        onclick="alert('Data service coming next')">
+        Data
+    </button>
+
+    <button type="button" onclick="showWallet()">
+        Wallet
+    </button>
+
+    <button type="button" onclick="loadTransactions()">
+        Transactions
+    </button>
+
+    
+</div>
+
+
+<div id="transactions-section"></div>
+
+<button
+    type="button"
+    id="backFromTransactions"
+    class="secondary-button hidden"
+    onclick="showDashboardFromTransactions()"
+>
+    Back to Dashboard
+</button>
+
+
+<a
+    href="https://wa.me/2348162879275"
+    target="_blank"
+    rel="noopener noreferrer"
+    class="whatsapp-button">
+    Contact Us on WhatsApp
+</a>
+
+    <button
+        class="secondary-button"
+        onclick="logout()"
+    >
+        Logout
+    </button>
+</div>
+
+<div class="card hidden" id="airtimeCard">
+    <h2>Buy Airtime</h2>
+
+    <label for="airtimeNetwork">Select Network</label>
+    <select id="airtimeNetwork">
+        <option value="">Choose a network</option>
+        <option value="MTN">MTN</option>
+        <option value="Airtel">Airtel</option>
+        <option value="Glo">Glo</option>
+        <option value="9mobile">9mobile</option>
+    </select>
+
+    <label for="airtimePhone">Phone Number</label>
+    <input
+        type="tel"
+        id="airtimePhone"
+        placeholder="Enter phone number"
+        maxlength="11"
+    >
+
+    <label for="airtimeAmount">Amount (₦)</label>
+    <input
+        type="number"
+        id="airtimeAmount"
+        placeholder="Enter amount"
+        min="50"
+        step="1"
+    >
+
+    <button type="button" onclick="buyAirtime()">Buy Airtime</button>
+
+    <p id="airtimeMessage"></p>
+
+    <button
+        type="button"
+        class="secondary-button"
+        onclick="showDashboardFromAirtime()"
+    >
+        Back to Dashboard
+    </button>
+</div>
+
+<div class="card hidden" id="walletCard">
+    <h2>My Wallet</h2>
+
+    <p id="walletBalance">Balance: ₦0.00</p>
+
+   <button onclick="fundWallet()">
+    Fund Wallet
+</button>
+  
+    <button
+        class="secondary-button"
+        onclick="showDashboardFromWallet()"
+    >
+        Back to Dashboard
+    </button>
+</div>
+      
     <script>
 
-        async function sendCustomer() {
+        // =========================
+        // LOGIN
+        // =========================
 
-            const name =
-                document.getElementById("name").value.trim();
+        async function login() {
 
-            const service =
-                document.getElementById("service").value.trim();
+            const phone =
+                document.getElementById("phone").value;
 
+            const password =
+                document.getElementById("password").value;
 
-            if (name === "" || service === "") {
+            const result =
+                document.getElementById("result");
 
-                document.getElementById("result").textContent =
-                    "Please enter both customer name and service.";
+            result.textContent = "Logging in...";
 
+            try {
+
+                const response = await fetch("/login", {
+
+                    method: "POST",
+
+                    headers: {
+                        "Content-Type": "application/json"
+                    },
+
+                    body: JSON.stringify({
+                        phone: phone,
+                        password: password
+                    })
+
+                });
+
+                const data = await response.json();
+
+                if (!response.ok) {
+
+                    result.textContent =
+                        data.detail || "Login failed.";
+
+                    return;
+                }
+
+                localStorage.setItem(
+                    "access_token",
+                    data.access_token
+                );
+
+                result.textContent =
+                    "Login successful!";
+
+            const profileResponse = await fetch("/me", {
+    headers: {
+        "Authorization": `Bearer ${data.access_token}`
+    }
+});
+
+const profile = await profileResponse.json();
+
+if (!profileResponse.ok) {
+    result.textContent = "Unable to load your profile.";
+    return;
+}
+
+showDashboard(profile);
+
+            } catch (error) {
+
+                result.textContent =
+                    "Unable to connect to the server.";
+
+                console.error(error);
+            }
+        }
+        // =========================
+        // PAYSTACK PAYMENT RETURN
+        // =========================
+
+        async function verifyPaymentOnReturn() {
+
+            const params =
+                new URLSearchParams(window.location.search);
+
+            const reference =
+                params.get("reference");
+
+            if (!reference) {
                 return;
             }
 
+            const token =
+                localStorage.getItem("access_token");
 
-            const response = await fetch(
-                `/customer?name=${encodeURIComponent(name)}&service=${encodeURIComponent(service)}`,
-                {
-                    method: "POST"
-                }
-            );
-
-
-            const data = await response.json();
-
-
-            document.getElementById("result").textContent =
-                "Customer added successfully.";
-
-
-            document.getElementById("name").value = "";
-
-            document.getElementById("service").value = "";
-
-
-            loadCustomers();
-
-        }
-
-
-        async function loadCustomers() {
-
-            const response = await fetch(
-                "/customers"
-            );
-
-
-            const customers = await response.json();
-
-
-            const table =
-                document.getElementById("customerTable");
-
-
-            table.innerHTML = "";
-
-
-            customers.forEach(function(customer) {
-
-                const row = `
-    <tr>
-        <td>${customer.id}</td>
-        <td>${customer.name}</td>
-        <td>${customer.service}</td>
-        <td>
-    <button onclick="editCustomer(${customer.id})">
-        Edit
-    </button>
-
-    <button onclick="deleteCustomer(${customer.id})">
-        Delete
-    </button>
-</td>
-    </tr>
-`;
-
-                table.innerHTML += row;
-
-            });
-
-        }
-
-
-        function searchCustomers() {
-
-            const search =
-                document.getElementById("search").value.toLowerCase();
-
-
-            const rows =
-                document.querySelectorAll("#customerTable tr");
-
-
-            rows.forEach(function(row) {
-
-                const name =
-                    row.children[1].textContent.toLowerCase();
-
-
-                if (name.includes(search)) {
-
-                    row.style.display = "";
-
-                } else {
-
-                    row.style.display = "none";
-
-                }
-
-            });
-
-        }
-
-        async function editCustomer(id) {
-
-            const name = prompt("Enter new customer name:");
-
-            if (name === null) {
+            if (!token) {
                 return;
             }
 
-            const service = prompt("Enter new service:");
+            try {
 
-            if (service === null) {
-                return;
-            }
+                const response = await fetch(
+                    "/paystack/verify/" +
+                    encodeURIComponent(reference),
+                    {
+                        method: "GET",
+                        headers: {
+                            "Authorization": `Bearer ${token}`
+                        }
+                    }
+                );
 
-            if (name.trim() === "" || service.trim() === "") {
-                alert("Name and service cannot be empty.");
-                return;
-            }
+                const data = await response.json();
 
-            const response = await fetch(
-                `/customer/${id}?name=${encodeURIComponent(name.trim())}&service=${encodeURIComponent(service.trim())}`,
-                {
-                    method: "PUT"
+                if (!response.ok) {
+                    console.error(
+                        "Payment verification failed:",
+                        data
+                    );
+                    return;
                 }
-            );
 
-            const data = await response.json();
+                if (data.status === "success") {
 
-            alert(data.message);
+                    alert(
+                        "Payment successful! Your wallet has been credited."
+                    );
 
-            loadCustomers();
+                    window.history.replaceState(
+                        {},
+                        document.title,
+                        window.location.pathname
+                    );
+
+                    showWallet();
+                }
+
+            } catch (error) {
+
+                console.error(
+                    "Unable to verify payment:",
+                    error
+                );
+            }
+        }
+
+        // =========================
+        // SHOW FORGOT PASSWORD
+        // =========================
+
+        function showForgotPassword() {
+
+            document
+                .getElementById("loginCard")
+                .classList.add("hidden");
+
+            document
+                .getElementById("resetCard")
+                .classList.add("hidden");
+
+            document
+                .getElementById("forgotCard")
+                .classList.remove("hidden");
         }
 
 
-        function searchCustomers() {
+        // =========================
+        // SHOW LOGIN
+        // =========================
 
-            const search =
-                document.getElementById("search").value.toLowerCase();
+        function showLogin() {
 
-            const rows =
-                document.querySelectorAll("#customerTable tr");
+            document
+                .getElementById("forgotCard")
+                .classList.add("hidden");
 
-            rows.forEach(function(row) {
+            document
+                .getElementById("resetCard")
+                .classList.add("hidden");
 
-                const name =
-                    row.children[1].textContent.toLowerCase();
-
-                if (name.includes(search)) {
-                    row.style.display = "";
-                } else {
-                    row.style.display = "none";
-                }
-
-            });
-
+            document
+                .getElementById("loginCard")
+                .classList.remove("hidden");
         }
-async function deleteCustomer(id) {
 
-    const confirmDelete = confirm(
-        "Are you sure you want to delete this customer?"
-    );
+function showSignUp() {
+    document.getElementById("loginCard").classList.add("hidden");
+    document.getElementById("forgotCard").classList.add("hidden");
+    document.getElementById("resetCard").classList.add("hidden");
+    document.getElementById("signupCard").classList.remove("hidden");
+}
 
-    if (!confirmDelete) {
+function showDashboard(user) {
+    document.getElementById("loginCard").classList.add("hidden");
+    document.getElementById("forgotCard").classList.add("hidden");
+    document.getElementById("resetCard").classList.add("hidden");
+    document.getElementById("signupCard").classList.add("hidden");
+
+    document.getElementById("dashboardCard").classList.remove("hidden");
+
+    document.getElementById("welcomeMessage").textContent =
+        "Welcome, " + user.name + "!";
+}
+
+async function showWallet() {
+
+
+    document.getElementById("walletCard").classList.remove("hidden");
+
+    const balance = document.getElementById("walletBalance");
+
+    balance.textContent = "Balance: Loading...";
+
+    const token = localStorage.getItem("access_token");
+
+    if (!token) {
+        balance.textContent = "Please log in again.";
         return;
     }
 
-    const response = await fetch(
-        `/customer/${id}`,
-        {
-            method: "DELETE"
+    try {
+        const response = await fetch("/wallet", {
+            headers: {
+                "Authorization": `Bearer ${token}`
+            }
+        });
+
+        const data = await response.json();
+
+        if (!response.ok) {
+            balance.textContent = data.detail || "Unable to load wallet.";
+            return;
         }
-    );
 
-    const data = await response.json();
+        balance.textContent =
+            "Balance: ₦" + Number(data.balance).toFixed(2);
 
-    alert(data.message);
-
-    loadCustomers();
+    } catch (error) {
+        balance.textContent = "Unable to connect to the server.";
+        console.error(error);
+    }
 }
 
-        loadCustomers();
+function showDashboardFromWallet() {
+    document.getElementById("walletCard").classList.add("hidden");
+    document.getElementById("dashboardCard").classList.remove("hidden");
+}
+
+
+function showAirtime() {
+    document.getElementById("dashboardCard").classList.add("hidden");
+    document.getElementById("walletCard").classList.add("hidden");
+    document.getElementById("airtimeCard").classList.remove("hidden");
+}
+
+function showDashboardFromAirtime() {
+    document.getElementById("airtimeCard").classList.add("hidden");
+    document.getElementById("dashboardCard").classList.remove("hidden");
+}
+
+
+function buyAirtime() {
+    const network = document.getElementById("airtimeNetwork").value;
+    const phone = document.getElementById("airtimePhone").value.trim();
+    const amount = Number(document.getElementById("airtimeAmount").value);
+    const message = document.getElementById("airtimeMessage");
+
+    message.textContent = "";
+
+    if (!network) {
+        message.textContent = "Please select a network.";
+        return;
+    }
+
+   
+if (!/^0\d{10}$/.test(phone)) {
+    message.textContent = "Enter a valid 11-digit Nigerian phone number.";
+    return;
+}
+
+
+
+const networkPrefixes = {
+    MTN: [
+        "0703", "0704", "0706", "0803", "0806",
+        "0810", "0813", "0814", "0816",
+        "0903", "0906", "0913", "0916",
+        "07025", "07026"
+    ],
+    Airtel: [
+        "0701", "0708", "0802", "0808", "0812",
+        "0901", "0902", "0904", "0907", "0912"
+    ],
+    Glo: [
+        "0705", "0805", "0807", "0811", "0815",
+        "0905", "0915"
+    ],
+    "9mobile": [
+        "0809", "0817", "0818", "0908", "0909"
+    ]
+};
+
+const matchesNetwork = networkPrefixes[network]?.some(prefix =>
+    phone.startsWith(prefix)
+);
+
+if (!matchesNetwork) {
+    message.textContent =
+        "This number's prefix does not match " + network +
+        ". Please check the number or select the correct network.";
+    return;
+}
+
+
+    if (!Number.isFinite(amount) || amount < 50) {
+        message.textContent = "The minimum airtime amount is ₦50.";
+        return;
+    }
+
+    message.textContent =
+        "Details validated. Secure purchase processing is not connected yet.";
+}
+
+
+async function fundWallet() {
+
+    const amount = prompt("Enter amount to fund:");
+
+    if (!amount) {
+        return;
+    }
+
+    const numericAmount = Number(amount);
+
+    if (!Number.isFinite(numericAmount) || numericAmount <= 0) {
+        alert("Please enter a valid amount.");
+        return;
+    }
+
+    const token = localStorage.getItem("access_token");
+
+    if (!token) {
+        alert("Please log in again.");
+        return;
+    }
+
+    try {
+
+        const response = await fetch("/paystack/initialize", {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                "Authorization": `Bearer ${token}`
+            },
+            body: JSON.stringify({
+                amount: numericAmount
+            })
+        });
+
+        const data = await response.json();
+
+        if (!response.ok) {
+            alert(data.detail || "Unable to initialize payment.");
+            return;
+        }
+
+        window.location.href = data.authorization_url;
+
+    } catch (error) {
+
+        alert("Unable to connect to the server.");
+        console.error(error);
+
+    }
+}
+function logout() {
+    localStorage.removeItem("access_token");
+
+    document.getElementById("dashboardCard").classList.add("hidden");
+    document.getElementById("loginCard").classList.remove("hidden");
+
+    document.getElementById("result").textContent =
+        "You have been logged out.";
+}
+async function signup() {
+    const name = document.getElementById("signupName").value;
+    const phone = document.getElementById("signupPhone").value;
+    const password = document.getElementById("signupPassword").value;
+    const result = document.getElementById("signupResult");
+
+    result.textContent = "Creating account...";
+
+    try {
+        const response = await fetch("/user", {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json"
+            },
+            body: JSON.stringify({
+                name: name,
+                phone: phone,
+                password: password
+            })
+        });
+
+        const data = await response.json();
+
+        if (!response.ok) {
+            result.textContent = data.detail || "Account creation failed.";
+            return;
+        }
+
+        result.textContent = "Account created successfully!";
+    } catch (error) {
+        result.textContent = "Unable to connect to the server.";
+        console.error(error);
+    }
+}
+
+
+        // =========================
+        // REQUEST PASSWORD RESET
+        // =========================
+
+        async function requestReset() {
+
+            const phone =
+                document.getElementById("forgotPhone").value;
+
+            const result =
+                document.getElementById("forgotResult");
+
+            const tokenBox =
+                document.getElementById("tokenBox");
+
+            const continueButton =
+                document.getElementById(
+                    "continueResetButton"
+                );
+
+            result.textContent =
+                "Generating reset token...";
+
+            tokenBox.classList.add("hidden");
+            continueButton.classList.add("hidden");
+
+            try {
+
+                const response =
+                    await fetch("/forgot-password", {
+
+                        method: "POST",
+
+                        headers: {
+                            "Content-Type":
+                                "application/json"
+                        },
+
+                        body: JSON.stringify({
+                            phone: phone
+                        })
+
+                    });
+
+                const data =
+                    await response.json();
+
+                if (!response.ok) {
+
+                    result.textContent =
+                        data.detail ||
+                        "Unable to generate reset token.";
+
+                    return;
+                }
+
+                result.textContent =
+                    "Reset token generated.";
+
+                tokenBox.textContent =
+                    "Test reset token: " +
+                    data.reset_token;
+
+                tokenBox.classList.remove("hidden");
+
+                continueButton.classList.remove(
+                    "hidden"
+                );
+
+                document.getElementById(
+                    "resetPhone"
+                ).value = phone;
+
+                document.getElementById(
+                    "resetToken"
+                ).value = data.reset_token;
+
+            } catch (error) {
+
+                result.textContent =
+                    "Unable to connect to the server.";
+
+                console.error(error);
+            }
+        }
+
+
+        // =========================
+        // SHOW RESET PASSWORD
+        // =========================
+
+        function showResetPassword() {
+
+            document
+                .getElementById("forgotCard")
+                .classList.add("hidden");
+
+            document
+                .getElementById("loginCard")
+                .classList.add("hidden");
+
+            document
+                .getElementById("resetCard")
+                .classList.remove("hidden");
+        }
+
+
+        // =========================
+        // RESET PASSWORD
+        // =========================
+
+        async function resetPassword() {
+
+            const phone =
+                document.getElementById(
+                    "resetPhone"
+                ).value;
+
+            const resetToken =
+                document.getElementById(
+                    "resetToken"
+                ).value;
+
+            const newPassword =
+                document.getElementById(
+                    "newPassword"
+                ).value;
+
+            const result =
+                document.getElementById(
+                    "resetResult"
+                );
+
+            result.textContent =
+                "Resetting password...";
+
+            try {
+
+                const response =
+                    await fetch("/reset-password", {
+
+                        method: "POST",
+
+                        headers: {
+                            "Content-Type":
+                                "application/json"
+                        },
+
+                        body: JSON.stringify({
+
+                            phone: phone,
+
+                            reset_token:
+                                resetToken,
+
+                            new_password:
+                                newPassword
+
+                        })
+
+                    });
+
+                const data =
+                    await response.json();
+
+               if (!response.ok) {
+    if (Array.isArray(data.detail)) {
+        result.textContent = data.detail
+            .map(error => error.msg)
+            .join(", ");
+    } else {
+        result.textContent = data.detail || "Login failed.";
+    }
+    return;
+}
+
+                result.textContent =
+                    "Password reset successfully!";
+
+            } catch (error) {
+
+                result.textContent =
+                    "Unable to connect to the server.";
+
+                console.error(error);
+            }
+        }
+        // Check for a Paystack payment return
+        verifyPaymentOnReturn();
+        
+
+
+async function loadTransactions() {
+    const section = document.getElementById("transactions-section");
+
+    section.innerHTML = "";
+    section.textContent = "Loading transactions...";
+
+    try {
+        const response = await fetch("/transactions", {
+            headers: {
+                "Authorization":
+                    "Bearer " + localStorage.getItem("access_token")
+            }
+        });
+
+        if (!response.ok) {
+            throw new Error("Could not load transactions.");
+        }
+
+        const data = await response.json();
+        const transactions = data.transactions || [];
+
+        section.replaceChildren();
+
+        const wrapper = document.createElement("div");
+        wrapper.className = "transaction-panel";
+        document.getElementById("backFromTransactions").classList.remove("hidden");
+        const heading = document.createElement("h2");
+        heading.textContent = "Transaction History";
+        wrapper.appendChild(heading);
+
+        const subtitle = document.createElement("p");
+        subtitle.className = "transaction-subtitle";
+        subtitle.textContent = "View your recent wallet transactions.";
+        wrapper.appendChild(subtitle);
+
+        const count = document.createElement("p");
+        count.className = "transaction-count";
+        count.textContent = transactions.length + " transaction(s)";
+        wrapper.appendChild(count);
+
+        if (transactions.length === 0) {
+            const empty = document.createElement("p");
+            empty.className = "transaction-empty";
+            empty.textContent = "No transactions found yet.";
+            wrapper.appendChild(empty);
+            section.appendChild(wrapper);
+            return;
+        }
+
+        const tableWrapper = document.createElement("div");
+        tableWrapper.className = "transaction-table-wrapper";
+
+        const table = document.createElement("table");
+        table.className = "transaction-table";
+
+        const thead = document.createElement("thead");
+        const headerRow = document.createElement("tr");
+
+        ["Transaction", "Type", "Amount", "Status", "Reference"]
+            .forEach(function (label) {
+                const th = document.createElement("th");
+                th.textContent = label;
+                headerRow.appendChild(th);
+            });
+
+        thead.appendChild(headerRow);
+        table.appendChild(thead);
+
+        const tbody = document.createElement("tbody");
+
+        transactions.forEach(function (transaction) {
+            const row = document.createElement("tr");
+
+            const idCell = document.createElement("td");
+            idCell.textContent =
+                "#" + transaction.transaction_id;
+            row.appendChild(idCell);
+
+            const typeCell = document.createElement("td");
+            typeCell.textContent =
+                transaction.transaction_type || "N/A";
+            row.appendChild(typeCell);
+
+            const amountCell = document.createElement("td");
+            amountCell.className = "transaction-amount";
+            amountCell.textContent = Number(transaction.amount)
+                .toLocaleString("en-NG", {
+                    style: "currency",
+                    currency: "NGN"
+                });
+            row.appendChild(amountCell);
+
+            const statusCell = document.createElement("td");
+            const status = document.createElement("span");
+            const statusText = String(
+                transaction.status || "unknown"
+            );
+
+            status.className = "transaction-status " +
+                (statusText.toLowerCase() === "success"
+                    ? "status-success"
+                    : "status-other");
+
+            status.textContent = statusText;
+            statusCell.appendChild(status);
+            row.appendChild(statusCell);
+
+            const referenceCell = document.createElement("td");
+            referenceCell.className = "transaction-reference";
+            referenceCell.textContent =
+                transaction.reference || "N/A";
+            row.appendChild(referenceCell);
+
+            tbody.appendChild(row);
+        });
+
+        table.appendChild(tbody);
+        tableWrapper.appendChild(table);
+        wrapper.appendChild(tableWrapper);
+        section.appendChild(wrapper);
+
+    } catch (error) {
+        section.textContent =
+            "Unable to load transactions. Please try again.";
+        console.error("Transaction history error:", error);
+    }
+}
+
+function showDashboardFromTransactions() {
+    document.getElementById("transactions-section").replaceChildren();
+    document.getElementById("backFromTransactions").classList.add("hidden");
+    document.getElementById("walletCard").classList.add("hidden");
+    document.getElementById("dashboardCard").classList.remove("hidden");
+}
 
     </script>
 
 </body>
+
 </html>
+

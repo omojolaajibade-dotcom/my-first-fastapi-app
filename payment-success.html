@@ -1,0 +1,154 @@
+```html
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Payment Status | Omotech</title>
+    <style>
+        body {
+            margin: 0;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-family: Arial, sans-serif;
+            background: #f3f7fc;
+            color: #1f2937;
+        }
+
+        .card {
+            width: 90%;
+            max-width: 420px;
+            padding: 32px 24px;
+            background: white;
+            border-radius: 16px;
+            text-align: center;
+            box-shadow: 0 8px 30px rgba(0, 0, 0, 0.08);
+        }
+
+        .icon {
+            font-size: 48px;
+            margin-bottom: 12px;
+        }
+
+        h1 {
+            color: #123c69;
+            font-size: 25px;
+        }
+
+        p {
+            line-height: 1.6;
+            color: #596579;
+        }
+
+        .status {
+            margin: 20px 0;
+            padding: 12px;
+            border-radius: 8px;
+            background: #fff4d6;
+            color: #8a5a00;
+            font-weight: bold;
+        }
+
+        button {
+            width: 100%;
+            padding: 13px;
+            border: none;
+            border-radius: 8px;
+            background: #1769e0;
+            color: white;
+            font-size: 16px;
+            cursor: pointer;
+        }
+
+        button:hover {
+            background: #1054b8;
+        }
+    </style>
+</head>
+<body>
+    <main class="card">
+        <div class="icon">⏳</div>
+        <h1>Payment Status</h1>
+        <p id="message">
+            Your payment has been submitted for verification.
+        </p>
+        <div class="status" id="status">Checking payment status...</div>
+        <p id="reference"></p>
+        <button onclick="window.location.href='/app'">
+            Return to Omotech
+        </button>
+    </main>
+
+html
+<script>
+    const params = new URLSearchParams(window.location.search);
+    const reference = params.get("reference") || params.get("trxref");
+
+    const statusElement = document.getElementById("status");
+    const messageElement = document.getElementById("message");
+    const iconElement = document.querySelector(".icon");
+
+    if (!reference) {
+        statusElement.textContent = "Payment reference not found.";
+        messageElement.textContent =
+            "Return to Omotech and check your transaction history.";
+    } else {
+        document.getElementById("reference").textContent =
+            "Reference: " + reference;
+
+        async function verifyPayment() {
+            const token = localStorage.getItem("access_token");
+
+            if (!token) {
+                statusElement.textContent = "Login required";
+                messageElement.textContent =
+                    "Please return to Omotech and log in to check your payment.";
+                return;
+            }
+
+            try {
+                const response = await fetch(
+                    "/paystack/verify/" + encodeURIComponent(reference),
+                    {
+                        headers: {
+                            "Authorization": "Bearer " + token
+                        }
+                    }
+                );
+
+                const data = await response.json();
+
+                if (!response.ok) {
+                    statusElement.textContent = "Unable to verify payment";
+                    messageElement.textContent =
+                        data.detail || "Please check your transaction history.";
+                    return;
+                }
+
+                if (data.status === "success") {
+                    iconElement.textContent = "✅";
+                    statusElement.textContent = "Payment confirmed";
+                    messageElement.textContent =
+                        "Your payment has been verified. Check your wallet balance.";
+                } else {
+                    statusElement.textContent =
+                        data.status || "Processing";
+                    messageElement.textContent =
+                        data.message || "Your payment is not yet confirmed.";
+                }
+            } catch (error) {
+                statusElement.textContent = "Verification unavailable";
+                messageElement.textContent =
+                    "Please check your transaction history and try again.";
+                console.error(error);
+            }
+        }
+
+        verifyPayment();
+    }
+</script>
+
+</body>
+</html>
