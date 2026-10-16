@@ -191,7 +191,7 @@
             word-break: break-all;
             font-size: 13px;
         }
-        
+
 .transaction-panel {
     margin: 24px 0;
     padding: 24px;
@@ -307,6 +307,13 @@
     }
 }
 
+
+.full-width-button {
+    grid-column: 1 / -1;
+    width: 100%;
+}
+
+
     </style>
 </head>
 
@@ -358,7 +365,7 @@
             <p id="result"></p>
 
         </div>
-    
+
         <a
     href="https://wa.me/2348162879275"
     target="_blank"
@@ -482,25 +489,33 @@
 
     <p id="welcomeMessage"></p>
 
-    
+
 <div class="dashboard-grid">
 
    <button type="button" onclick="showAirtime()">Airtime</button>
 
-    <button type="button"
-        onclick="alert('Data service coming next')">
-        Data
-    </button>
+    <button type="button" onclick="showData()">Data</button>
 
     <button type="button" onclick="showWallet()">
         Wallet
     </button>
 
-    <button type="button" onclick="loadTransactions()">
-        Transactions
-    </button>
+<button type="button" onclick="showProfile()">
+    My Profile
+</button>
 
-    
+
+
+<button
+    type="button"
+    onclick="loadTransactions()"
+    class="full-width-button"
+>
+    Transaction History
+</button>
+
+
+
 </div>
 
 
@@ -582,7 +597,7 @@
    <button onclick="fundWallet()">
     Fund Wallet
 </button>
-  
+
     <button
         class="secondary-button"
         onclick="showDashboardFromWallet()"
@@ -590,7 +605,64 @@
         Back to Dashboard
     </button>
 </div>
-      
+
+<div class="card hidden" id="profileCard">
+    <h2>My Profile</h2>
+
+    <label for="profileName">Full Name</label>
+    <input type="text" id="profileName" minlength="2" maxlength="100">
+
+    <label for="profileEmail">Email Address</label>
+    <input type="email" id="profileEmail">
+
+    <label for="profilePhone">Phone Number</label>
+    <input type="tel" id="profilePhone" minlength="10" maxlength="20">
+
+    <button type="button" onclick="updateProfile()">
+        Save Profile
+    </button>
+
+    <p id="profileMessage"></p>
+
+    <button
+        type="button"
+        class="secondary-button"
+        onclick="showDashboardFromProfile()"
+    >
+        Back to Dashboard
+    </button>
+</div>
+
+<div class="card hidden" id="dataCard">
+    <h2>Buy Data</h2>
+
+    <label for="dataNetwork">Select Network</label>
+    <select id="dataNetwork">
+        <option value="">Choose network</option>
+        <option value="MTN">MTN</option>
+        <option value="Airtel">Airtel</option>
+        <option value="Glo">Glo</option>
+        <option value="9mobile">9mobile</option>
+    </select>
+
+    <label for="dataPhone">Phone Number</label>
+    <input type="tel" id="dataPhone" placeholder="Enter phone number">
+
+    <label for="dataPlan">Select Data Plan</label>
+    <select id="dataPlan">
+        <option value="">Choose a data plan</option>
+        <option value="500MB">500 MB</option>
+        <option value="1GB">1 GB</option>
+        <option value="2GB">2 GB</option>
+        <option value="5GB">5 GB</option>
+    </select>
+
+    <p id="dataMessage"></p>
+
+    <button type="button" onclick="buyData()">Continue</button>
+    <button type="button" class="secondary-button" onclick="showDashboardFromData()">Back to Dashboard</button>
+</div>
+
     <script>
 
         // =========================
@@ -796,6 +868,105 @@ function showDashboard(user) {
         "Welcome, " + user.name + "!";
 }
 
+
+function showProfile() {
+    document.getElementById("dashboardCard").classList.add("hidden");
+    document.getElementById("walletCard").classList.add("hidden");
+    document.getElementById("airtimeCard").classList.add("hidden");
+    document.getElementById("profileCard").classList.remove("hidden");
+
+    loadProfile();
+}
+
+function showDashboardFromProfile() {
+    document.getElementById("profileCard").classList.add("hidden");
+    document.getElementById("dashboardCard").classList.remove("hidden");
+}
+
+async function loadProfile() {
+    const message = document.getElementById("profileMessage");
+    const token = localStorage.getItem("access_token");
+
+    if (!token) {
+        message.textContent = "Please log in again.";
+        return;
+    }
+
+    message.textContent = "Loading profile...";
+
+    try {
+        const response = await fetch("/me", {
+            headers: {
+                "Authorization": `Bearer ${token}`
+            }
+        });
+
+        const data = await response.json();
+
+        if (!response.ok) {
+            message.textContent = data.detail || "Unable to load profile.";
+            return;
+        }
+
+        document.getElementById("profileName").value = data.name || "";
+        document.getElementById("profileEmail").value = data.email || "";
+        document.getElementById("profilePhone").value = data.phone || "";
+
+        message.textContent = "";
+    } catch (error) {
+        message.textContent = "Unable to connect to the server.";
+        console.error(error);
+    }
+}
+
+async function updateProfile() {
+    const message = document.getElementById("profileMessage");
+    const token = localStorage.getItem("access_token");
+
+    if (!token) {
+        message.textContent = "Please log in again.";
+        return;
+    }
+
+    const name = document.getElementById("profileName").value.trim();
+    const email = document.getElementById("profileEmail").value.trim();
+    const phone = document.getElementById("profilePhone").value.trim();
+
+    if (name.length < 2 || !email || phone.length < 10 || phone.length > 20) {
+        message.textContent = "Please enter a valid name, email, and phone number.";
+        return;
+    }
+
+    message.textContent = "Saving profile...";
+
+    try {
+        const response = await fetch("/profile", {
+            method: "PUT",
+            headers: {
+                "Content-Type": "application/json",
+                "Authorization": `Bearer ${token}`
+            },
+            body: JSON.stringify({ name, email, phone })
+        });
+
+        const data = await response.json();
+
+        if (!response.ok) {
+            message.textContent = data.detail || "Unable to update profile.";
+            return;
+        }
+
+        document.getElementById("welcomeMessage").textContent =
+            "Welcome, " + name + "!";
+
+        message.textContent = "Profile updated successfully.";
+    } catch (error) {
+        message.textContent = "Unable to connect to the server.";
+        console.error(error);
+    }
+}
+
+
 async function showWallet() {
 
 
@@ -866,7 +1037,7 @@ function buyAirtime() {
         return;
     }
 
-   
+
 if (!/^0\d{10}$/.test(phone)) {
     message.textContent = "Enter a valid 11-digit Nigerian phone number.";
     return;
@@ -966,6 +1137,135 @@ async function fundWallet() {
         console.error(error);
 
     }
+}
+
+function showData() {
+    document.getElementById("dashboardCard").classList.add("hidden");
+    document.getElementById("airtimeCard").classList.add("hidden");
+    document.getElementById("walletCard").classList.add("hidden");
+    document.getElementById("profileCard").classList.add("hidden");
+    document.getElementById("dataCard").classList.remove("hidden");
+}
+
+function showDashboardFromData() {
+    document.getElementById("dataCard").classList.add("hidden");
+    document.getElementById("dashboardCard").classList.remove("hidden");
+}
+
+function detectDataNetwork() {
+    const phone = document.getElementById("dataPhone").value.trim();
+    const networkSelect = document.getElementById("dataNetwork");
+    const message = document.getElementById("dataMessage");
+
+    let number = phone.replace(/[\s-]/g, "");
+
+    if (number.startsWith("+234")) {
+        number = "0" + number.slice(4);
+    } else if (number.startsWith("234")) {
+        number = "0" + number.slice(3);
+    }
+
+    if (!/^0\d{10}$/.test(number)) {
+        networkSelect.value = "";
+        message.textContent = "";
+        return;
+    }
+
+    const networkPrefixes = {
+        MTN: [
+            "0703", "0704", "0706", "0803", "0806",
+            "0810", "0813", "0814", "0816",
+            "0903", "0906", "0913", "0916",
+            "07025", "07026"
+        ],
+        Airtel: [
+            "0701", "0708", "0802", "0808", "0812",
+            "0901", "0902", "0904", "0907", "0912"
+        ],
+        Glo: [
+            "0705", "0805", "0807", "0811", "0815",
+            "0905", "0915"
+        ],
+        "9mobile": [
+            "0809", "0817", "0818", "0908", "0909"
+        ]
+    };
+
+    for (const [network, prefixes] of Object.entries(networkPrefixes)) {
+        if (prefixes.some(prefix => number.startsWith(prefix))) {
+            networkSelect.value = network;
+            message.textContent =
+                "Likely network detected: " + network +
+                ". Please confirm before continuing.";
+            return;
+        }
+    }
+
+    networkSelect.value = "";
+    message.textContent =
+        "Network not recognised. Please select your network manually.";
+}
+function buyData() {
+    const network = document.getElementById("dataNetwork").value;
+    const phone = document.getElementById("dataPhone").value.trim();
+    const plan = document.getElementById("dataPlan").value;
+    const message = document.getElementById("dataMessage");
+
+    if (!network || !phone || !plan) {
+        message.textContent = "Please select a network, enter a phone number, and choose a data plan.";
+        return;
+    }
+let number = phone.replace(/[\s-]/g, "");
+
+if (number.startsWith("+234")) {
+    number = "0" + number.slice(4);
+} else if (number.startsWith("234")) {
+    number = "0" + number.slice(3);
+}
+
+if (!/^0\d{10}$/.test(number)) {
+    message.textContent = "Please enter a valid Nigerian phone number.";
+    return;
+}
+
+const networkPrefixes = {
+    MTN: [
+        "0703", "0704", "0706", "0803", "0806",
+        "0810", "0813", "0814", "0816",
+        "0903", "0906", "0913", "0916",
+        "07025", "07026"
+    ],
+    Airtel: [
+        "0701", "0708", "0802", "0808", "0812",
+        "0901", "0902", "0904", "0907", "0912"
+    ],
+    Glo: [
+        "0705", "0805", "0807", "0811", "0815",
+        "0905", "0915"
+    ],
+    "9mobile": [
+        "0809", "0817", "0818", "0908", "0909"
+    ]
+};
+
+const detectedNetwork = Object.entries(networkPrefixes).find(
+    ([name, prefixes]) =>
+        prefixes.some(prefix => number.startsWith(prefix))
+)?.[0];
+
+if (detectedNetwork && detectedNetwork !== network) {
+    message.textContent = "This is not an " + network + " number. The prefix suggests " + detectedNetwork + ".";
+    return;
+}
+
+if (!detectedNetwork) {
+    message.textContent = "We cannot identify this number's network. Please check the number.";
+    return;
+}
+
+message.textContent =
+    "Details validated. Data purchase is not connected to the provider yet.";
+
 }
 function logout() {
     localStorage.removeItem("access_token");
@@ -1201,7 +1501,7 @@ async function signup() {
         }
         // Check for a Paystack payment return
         verifyPaymentOnReturn();
-        
+
 
 
 async function loadTransactions() {

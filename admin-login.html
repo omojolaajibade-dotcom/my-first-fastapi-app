@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Omotech Admin Login</title>
+
+    <style>
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            margin: 0;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+            font-family: Arial, sans-serif;
+            background: #eef3f9;
+            color: #172b4d;
+        }
+
+        .login-card {
+            width: 100%;
+            max-width: 420px;
+            padding: 32px;
+            background: #ffffff;
+            border-radius: 16px;
+            box-shadow: 0 12px 35px rgba(20, 40, 80, 0.12);
+        }
+
+        .brand {
+            color: #1769e0;
+            font-size: 27px;
+            font-weight: 700;
+            text-align: center;
+            margin-bottom: 8px;
+        }
+
+        h1 {
+            text-align: center;
+            font-size: 23px;
+            margin-bottom: 8px;
+        }
+
+        .subtitle {
+            text-align: center;
+            color: #64748b;
+            line-height: 1.5;
+            margin-bottom: 28px;
+        }
+
+        label {
+            display: block;
+            margin: 16px 0 8px;
+            font-weight: 600;
+        }
+
+        input {
+            width: 100%;
+            padding: 13px;
+            border: 1px solid #cbd5e1;
+            border-radius: 8px;
+            font-size: 16px;
+        }
+
+        input:focus {
+            outline: 2px solid #1769e0;
+            border-color: transparent;
+        }
+
+        button {
+            width: 100%;
+            margin-top: 24px;
+            padding: 14px;
+            border: none;
+            border-radius: 8px;
+            background: #1769e0;
+            color: white;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+        }
+
+        button:disabled {
+            opacity: 0.65;
+            cursor: wait;
+        }
+
+        #message {
+            min-height: 24px;
+            margin-top: 16px;
+            line-height: 1.5;
+            overflow-wrap: anywhere;
+        }
+
+        .back-link {
+            display: block;
+            margin-top: 20px;
+            text-align: center;
+            color: #1769e0;
+            text-decoration: none;
+        }
+    </style>
+</head>
+
+<body>
+    <main class="login-card">
+        <div class="brand">OMOTECH</div>
+
+        <h1>Administrator Login</h1>
+
+        <p class="subtitle">
+            Sign in to manage users, transactions, and your dashboard.
+        </p>
+
+        <form id="loginForm">
+            <label for="username">Admin Username</label>
+            <input
+                id="username"
+                name="username"
+                type="text"
+                minlength="3"
+                maxlength="100"
+                autocomplete="username"
+                required
+            >
+
+            <label for="password">Admin Password</label>
+            <input
+                id="password"
+                name="password"
+                type="password"
+                minlength="8"
+                maxlength="128"
+                autocomplete="current-password"
+                required
+            >
+
+            <button id="loginButton" type="submit">
+                Sign In
+            </button>
+
+            <p id="message" role="status" aria-live="polite"></p>
+        </form>
+
+        <a class="back-link" href="/">Return to Omotech</a>
+    </main>
+
+    <script>
+        const loginForm = document.getElementById("loginForm");
+        const loginButton = document.getElementById("loginButton");
+        const message = document.getElementById("message");
+
+        loginForm.addEventListener("submit", async function (event) {
+            event.preventDefault();
+
+            message.textContent = "";
+            loginButton.disabled = true;
+            loginButton.textContent = "Signing in...";
+
+            const username =
+                document.getElementById("username").value.trim();
+
+            const password =
+                document.getElementById("password").value;
+
+            try {
+                const response = await fetch("/admin/login", {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/json"
+                    },
+                    body: JSON.stringify({
+                        username: username,
+                        password: password
+                    })
+                });
+
+                const data = await response.json();
+
+                if (!response.ok) {
+                    message.textContent =
+                        data.detail || "Login failed. Please try again.";
+                    return;
+                }
+
+                if (!data.access_token || data.admin == null) {
+                    message.textContent =
+                        "The server returned an unexpected response.";
+                    return;
+                }
+
+                sessionStorage.setItem(
+                    "omotech_admin_token",
+                    data.access_token
+                );
+
+                window.location.href = "/admin-dashboard.html";
+
+            } catch (error) {
+                message.textContent =
+                    "Unable to contact the server. Check your connection.";
+            } finally {
+                loginButton.disabled = false;
+                loginButton.textContent = "Sign In";
+            }
+        });
+    </script>
+</body>
+</html>

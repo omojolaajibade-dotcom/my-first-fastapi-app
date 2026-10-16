@@ -1,0 +1,932 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Omotech | Admin Dashboard</title>
+
+    <style>
+        :root {
+            --primary: #1769e0;
+            --primary-dark: #104da8;
+            --background: #f3f6fb;
+            --surface: #ffffff;
+            --text: #1d2939;
+            --muted: #667085;
+            --border: #e4e7ec;
+            --success: #067647;
+            --danger: #b42318;
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            margin: 0;
+            font-family: Arial, sans-serif;
+            background: var(--background);
+            color: var(--text);
+        }
+
+        button, input {
+            font: inherit;
+        }
+
+        button {
+            cursor: pointer;
+        }
+
+        .layout {
+            display: flex;
+            min-height: 100vh;
+        }
+
+        .sidebar {
+            width: 245px;
+            flex-shrink: 0;
+            padding: 28px 18px;
+            background: #123c69;
+            color: white;
+        }
+
+        .brand {
+            margin: 0 0 8px;
+            font-size: 25px;
+            font-weight: 800;
+            letter-spacing: 1px;
+        }
+
+        .brand-subtitle {
+            margin: 0 0 35px;
+            color: #d5e5ff;
+            font-size: 12px;
+        }
+
+        .nav-label {
+            margin: 22px 10px 10px;
+            color: #b8cce8;
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        .nav-button {
+            display: block;
+            width: 100%;
+            margin: 5px 0;
+            padding: 13px 12px;
+            border: 0;
+            border-radius: 8px;
+            background: transparent;
+            color: white;
+            text-align: left;
+        }
+
+        .nav-button:hover,
+        .nav-button.active {
+            background: #24558a;
+        }
+
+        .sidebar-footer {
+            margin-top: 35px;
+        }
+
+        .logout-button {
+            width: 100%;
+            padding: 12px;
+            border: 1px solid #7c9fc6;
+            border-radius: 8px;
+            background: transparent;
+            color: white;
+        }
+
+        .main {
+            flex: 1;
+            min-width: 0;
+            padding: 28px;
+        }
+
+        .topbar {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 16px;
+            margin-bottom: 28px;
+        }
+
+        .topbar h1 {
+            margin: 0 0 7px;
+            font-size: 27px;
+        }
+
+        .muted {
+            color: var(--muted);
+            font-size: 14px;
+        }
+
+        .admin-badge {
+            padding: 10px 14px;
+            border-radius: 24px;
+            background: #e1edff;
+            color: #174ea6;
+            font-size: 13px;
+            font-weight: bold;
+        }
+
+        .notice {
+            display: none;
+            margin-bottom: 20px;
+            padding: 13px 15px;
+            border-radius: 8px;
+            background: #fff0f0;
+            color: var(--danger);
+            font-size: 14px;
+        }
+
+        .notice.show {
+            display: block;
+        }
+
+        .stats {
+            display: grid;
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+            gap: 18px;
+            margin-bottom: 25px;
+        }
+
+        .stat-card,
+        .panel {
+            border: 1px solid var(--border);
+            border-radius: 13px;
+            background: var(--surface);
+            box-shadow: 0 3px 12px rgba(16, 24, 40, 0.03);
+        }
+
+        .stat-card {
+            padding: 21px;
+        }
+
+        .stat-label {
+            color: var(--muted);
+            font-size: 13px;
+        }
+
+        .stat-value {
+            margin-top: 13px;
+            font-size: 29px;
+            font-weight: 750;
+            overflow-wrap: anywhere;
+        }
+
+        .panel {
+            margin-bottom: 22px;
+            padding: 22px;
+        }
+
+        .panel-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 12px;
+            margin-bottom: 18px;
+        }
+
+        .panel h2 {
+            margin: 0;
+            font-size: 18px;
+        }
+
+        .toolbar {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+        }
+
+        .search {
+            width: min(100%, 260px);
+            padding: 10px 12px;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            outline-color: var(--primary);
+        }
+
+        .button {
+            padding: 10px 14px;
+            border: 0;
+            border-radius: 8px;
+            background: var(--primary);
+            color: white;
+            font-weight: 600;
+        }
+
+        .button:hover {
+            background: var(--primary-dark);
+        }
+
+        .button.secondary {
+            border: 1px solid var(--border);
+            background: white;
+            color: var(--text);
+        }
+
+        .table-wrap {
+            width: 100%;
+            overflow-x: auto;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            white-space: nowrap;
+            font-size: 13px;
+        }
+
+        th, td {
+            padding: 14px 12px;
+            border-bottom: 1px solid var(--border);
+            text-align: left;
+        }
+
+        th {
+            background: #f8fafc;
+            color: var(--muted);
+            font-weight: 600;
+        }
+
+        .status {
+            display: inline-block;
+            padding: 5px 9px;
+            border-radius: 20px;
+            background: #ecfdf3;
+            color: var(--success);
+            font-size: 12px;
+            font-weight: bold;
+        }
+
+        .status.pending {
+            background: #fff4d6;
+            color: #8a5a00;
+        }
+
+        .status.failed,
+        .status.inactive {
+            background: #fff0f0;
+            color: var(--danger);
+        }
+
+        .empty {
+            padding: 25px 12px;
+            color: var(--muted);
+            text-align: center;
+            white-space: normal;
+        }
+
+        .section {
+            display: none;
+        }
+
+        .section.active {
+            display: block;
+        }
+
+        .profile-grid {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 18px;
+        }
+
+        .field label {
+            display: block;
+            margin-bottom: 7px;
+            font-size: 13px;
+            font-weight: bold;
+        }
+
+        .field input {
+            width: 100%;
+            padding: 12px;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+        }
+
+        .profile-form {
+            max-width: 650px;
+        }
+
+        .profile-form .button {
+            margin-top: 20px;
+        }
+
+        .loading {
+            color: var(--muted);
+            font-size: 14px;
+        }
+
+        @media (max-width: 1100px) {
+            .stats {
+                grid-template-columns: repeat(2, minmax(0, 1fr));
+            }
+        }
+
+        @media (max-width: 700px) {
+            .layout {
+                display: block;
+            }
+
+            .sidebar {
+                width: 100%;
+                padding: 18px;
+            }
+
+            .brand-subtitle {
+                margin-bottom: 15px;
+            }
+
+            .nav-label {
+                margin-top: 15px;
+            }
+
+            .nav-button {
+                display: inline-block;
+                width: auto;
+                margin: 3px;
+            }
+
+            .sidebar-footer {
+                margin-top: 15px;
+            }
+
+            .main {
+                padding: 18px 12px;
+            }
+
+            .topbar h1 {
+                font-size: 22px;
+            }
+
+            .stats {
+                gap: 10px;
+            }
+
+            .stat-card {
+                padding: 15px;
+            }
+
+            .stat-value {
+                font-size: 23px;
+            }
+
+            .panel {
+                padding: 15px;
+            }
+
+            .profile-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+
+<body>
+    <div class="layout">
+        <aside class="sidebar">
+            <p class="brand">OMOTECH</p>
+            <p class="brand-subtitle">Airtime &amp; Data Administration</p>
+
+            <p class="nav-label">Workspace</p>
+
+            <button class="nav-button active" data-section="overview">
+                Overview
+            </button>
+
+            <button class="nav-button" data-section="users">
+                Users
+            </button>
+
+            <button class="nav-button" data-section="transactions">
+                Transactions
+            </button>
+
+            <p class="nav-label">Account</p>
+
+            <button class="nav-button" data-section="profile">
+                Admin Profile
+            </button>
+
+            <div class="sidebar-footer">
+                <button class="logout-button" id="logoutButton">
+                    Log out
+                </button>
+            </div>
+        </aside>
+
+        <main class="main">
+            <header class="topbar">
+                <div>
+                    <h1 id="pageTitle">Dashboard Overview</h1>
+                    <div class="muted">Monitor your Omotech platform.</div>
+                </div>
+
+                <div class="admin-badge" id="adminName">Administrator</div>
+            </header>
+
+            <div class="notice" id="notice" role="alert"></div>
+
+            <section class="section active" id="overview">
+                <div class="stats">
+                    <article class="stat-card">
+                        <div class="stat-label">Total Users</div>
+                        <div class="stat-value" id="totalUsers">—</div>
+                    </article>
+
+                    <article class="stat-card">
+                        <div class="stat-label">Total Transactions</div>
+                        <div class="stat-value" id="totalTransactions">—</div>
+                    </article>
+
+                    <article class="stat-card">
+                        <div class="stat-label">Successful Transactions</div>
+                        <div class="stat-value" id="successfulTransactions">—</div>
+                    </article>
+
+                    <article class="stat-card">
+                        <div class="stat-label">Total Wallet Balance</div>
+                        <div class="stat-value" id="transactionVolume">—</div>
+                    </article>
+                </div>
+
+                <div class="panel">
+                    <div class="panel-header">
+                        <h2>Recent Transactions</h2>
+                        <button class="button secondary" data-go="transactions">
+                            View all
+                        </button>
+                    </div>
+
+                    <div class="table-wrap">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Reference</th>
+                                    <th>User</th>
+                                    <th>Type</th>
+                                    <th>Amount</th>
+                                    <th>Status</th>
+                                </tr>
+                            </thead>
+                            <tbody id="recentTransactions">
+                                <tr>
+                                    <td colspan="5" class="empty">Loading transactions...</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </section>
+
+            <section class="section" id="users">
+                <div class="panel">
+                    <div class="panel-header">
+                        <h2>Registered Users</h2>
+                        <div class="toolbar">
+                            <input class="search" id="userSearch"
+                                   placeholder="Search users..." aria-label="Search users">
+                            <button class="button" id="refreshUsers">Refresh</button>
+                        </div>
+                    </div>
+
+                    <div class="table-wrap">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>ID</th>
+                                    <th>Name</th>
+                                    <th>Phone</th>
+                                    <th>Wallet Balance</th>
+                                </tr>
+                            </thead>
+                            <tbody id="usersTable">
+                                <tr>
+                                    <td colspan="4" class="empty">Loading users...</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </section>
+
+            <section class="section" id="transactions">
+                <div class="panel">
+                    <div class="panel-header">
+                        <h2>Transaction History</h2>
+                        <div class="toolbar">
+                            <input class="search" id="transactionSearch"
+                                   placeholder="Search transactions..."
+                                   aria-label="Search transactions">
+                            <button class="button" id="refreshTransactions">Refresh</button>
+                        </div>
+                    </div>
+
+                    <div class="table-wrap">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>ID</th>
+                                    <th>Reference</th>
+                                    <th>User ID</th>
+                                    <th>Type</th>
+                                    <th>Amount</th>
+                                    <th>Status</th>
+                                </tr>
+                            </thead>
+                            <tbody id="transactionsTable">
+                                <tr>
+                                    <td colspan="6" class="empty">Loading transactions...</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </section>
+
+            <section class="section" id="profile">
+                <div class="panel">
+                    <h2>Administrator Profile</h2>
+                    <p class="muted">View and update your administrator details.</p>
+
+                    <form id="profileForm" class="profile-form">
+                        <div class="profile-grid">
+                            <div class="field">
+                                <label for="profileUsername">Username</label>
+                                <input id="profileUsername" name="username" required>
+                            </div>
+
+                            <div class="field">
+                                <label for="profileEmail">Email</label>
+                                <input id="profileEmail" name="email" type="email">
+                            </div>
+                        </div>
+
+                        <button class="button" type="submit">Save Profile</button>
+                    </form>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <script>
+        const token = sessionStorage.getItem("omotech_admin_token");
+        const notice = document.getElementById("notice");
+
+        let users = [];
+        let transactions = [];
+
+        function showNotice(message) {
+            notice.textContent = message;
+            notice.classList.add("show");
+        }
+
+        function clearNotice() {
+            notice.textContent = "";
+            notice.classList.remove("show");
+        }
+
+        function logout() {
+            sessionStorage.removeItem("omotech_admin_token");
+            window.location.replace("/admin-login.html");
+        }
+
+        if (!token) {
+            window.location.replace("/admin-login.html");
+        }
+
+        async function api(path, options = {}) {
+            const response = await fetch(path, {
+                ...options,
+                headers: {
+                    "Authorization": `Bearer ${token}`,
+                    ...(options.body ? { "Content-Type": "application/json" } : {}),
+                    ...(options.headers || {})
+                }
+            });
+
+            if (response.status === 401 || response.status === 403) {
+                logout();
+                throw new Error("Your admin session has expired. Please log in again.");
+            }
+
+            const data = await response.json().catch(() => ({}));
+
+            if (!response.ok) {
+                throw new Error(data.detail || data.message || "Request failed.");
+            }
+
+            return data;
+        }
+
+        function getArray(data, keys) {
+            if (Array.isArray(data)) return data;
+
+            for (const key of keys) {
+                if (Array.isArray(data?.[key])) return data[key];
+            }
+
+            return [];
+        }
+
+        function escapeHtml(value) {
+            return String(value ?? "").replace(/[&<>"']/g, character => ({
+                "&": "&amp;",
+                "<": "&lt;",
+                ">": "&gt;",
+                '"': "&quot;",
+                "'": "&#39;"
+            })[character]);
+        }
+
+        function formatMoney(value) {
+            const amount = Number(value ?? 0);
+
+            if (!Number.isFinite(amount)) return "₦0.00";
+
+            return amount.toLocaleString("en-NG", {
+                style: "currency",
+                currency: "NGN"
+            });
+        }
+
+        function statusClass(status) {
+            const value = String(status ?? "").toLowerCase();
+
+            if (["success", "successful", "completed", "active"].includes(value)) {
+                return "status";
+            }
+
+            if (["pending", "processing"].includes(value)) {
+                return "status pending";
+            }
+
+            return "status failed";
+        }
+
+        function renderEmpty(columns, message) {
+            return `<tr><td colspan="${columns}" class="empty">${escapeHtml(message)}</td></tr>`;
+        }
+
+        function transactionReference(item) {
+            return item.reference ?? item.payment_reference ?? "—";
+        }
+
+        function transactionType(item) {
+            return item.transaction_type ?? item.type ?? item.description ?? "—";
+        }
+
+        function transactionStatus(item) {
+            return item.status ?? "unknown";
+        }
+
+        function transactionAmount(item) {
+            return item.amount ?? item.total_amount ?? 0;
+        }
+
+        function renderTransactions(items, targetId, limit = Infinity) {
+            const target = document.getElementById(targetId);
+            const visible = items.slice(0, limit);
+
+            if (!visible.length) {
+                target.innerHTML = renderEmpty(
+                    targetId === "recentTransactions" ? 5 : 6,
+                    "No transactions found."
+                );
+                return;
+            }
+
+            target.innerHTML = visible.map(item => {
+                const status = transactionStatus(item);
+
+                if (targetId === "recentTransactions") {
+                    return `
+                        <tr>
+                            <td>${escapeHtml(transactionReference(item))}</td>
+                            <td>${escapeHtml(item.user_id ?? item.user_name ?? "—")}</td>
+                            <td>${escapeHtml(transactionType(item))}</td>
+                            <td>${escapeHtml(formatMoney(transactionAmount(item)))}</td>
+                            <td><span class="${statusClass(status)}">${escapeHtml(status)}</span></td>
+                        </tr>
+                    `;
+                }
+
+                return `
+                    <tr>
+                        <td>${escapeHtml(item.transaction_id ?? item.id ?? "—")}</td>
+                        <td>${escapeHtml(transactionReference(item))}</td>
+                        <td>${escapeHtml(item.user_id ?? "—")}</td>
+                        <td>${escapeHtml(transactionType(item))}</td>
+                        <td>${escapeHtml(formatMoney(transactionAmount(item)))}</td>
+                        <td><span class="${statusClass(status)}">${escapeHtml(status)}</span></td>
+                    </tr>
+                `;
+            }).join("");
+        }
+
+        function renderUsers() {
+            const query = document.getElementById("userSearch").value
+                .trim().toLowerCase();
+
+            const filtered = users.filter(user =>
+                [user.id, user.name, user.phone]
+                    .some(value => String(value ?? "").toLowerCase().includes(query))
+            );
+
+            const target = document.getElementById("usersTable");
+
+            if (!filtered.length) {
+                target.innerHTML = renderEmpty(4, "No matching users found.");
+                return;
+            }
+
+            target.innerHTML = filtered.map(user => `
+                <tr>
+                    <td>${escapeHtml(user.id)}</td>
+                    <td>${escapeHtml(user.name ?? "—")}</td>
+                    <td>${escapeHtml(user.phone ?? "—")}</td>
+                    <td>${escapeHtml(formatMoney(user.wallet_balance))}</td>
+                </tr>
+            `).join("");
+        }
+
+        function renderTransactionSearch() {
+            const query = document.getElementById("transactionSearch").value
+                .trim().toLowerCase();
+
+            const filtered = transactions.filter(item =>
+                [
+                    item.id,
+                    transactionReference(item),
+                    item.user_id,
+                    transactionType(item),
+                    transactionStatus(item)
+                ].some(value => String(value ?? "").toLowerCase().includes(query))
+            );
+
+            renderTransactions(filtered, "transactionsTable");
+        }
+
+        async function loadOverview() {
+    try {
+        const data = await api("/admin/overview");
+        const overview = data.overview || {};
+
+        document.getElementById("totalUsers").textContent =
+            overview.total_users ?? 0;
+
+        document.getElementById("totalTransactions").textContent =
+            overview.total_funding_transactions ?? 0;
+
+        document.getElementById("successfulTransactions").textContent =
+            overview.successful_transactions ?? 0;
+
+        document.getElementById("transactionVolume").textContent =
+            formatMoney(overview.total_wallet_balance ?? 0);
+
+    } catch (error) {
+        console.error("Failed to load overview:", error);
+    }
+}
+
+        async function loadUsers() {
+            const data = await api("/admin/users");
+            users = getArray(data, ["users", "items", "results"]);
+            renderUsers();
+        }
+
+        async function loadTransactions() {
+            const data = await api("/admin/transactions");
+            transactions = getArray(data, ["transactions", "items", "results"]);
+
+            renderTransactions(transactions, "transactionsTable");
+            renderTransactions(transactions, "recentTransactions", 5);
+        }
+
+        async function loadProfile() {
+            const data = await api("/admin/profile");
+            const profile = data.admin ?? data.profile ?? data;
+
+            document.getElementById("profileUsername").value =
+                profile.username ?? "";
+
+            document.getElementById("profileEmail").value =
+                profile.email ?? "";
+
+            document.getElementById("adminName").textContent =
+                profile.username ?? "Administrator";
+        }
+
+        async function loadDashboard() {
+            clearNotice();
+
+            const results = await Promise.allSettled([
+                loadOverview(),
+                loadUsers(),
+                loadTransactions(),
+                loadProfile()
+            ]);
+
+            const failed = results.filter(result => result.status === "rejected");
+
+            if (failed.length) {
+                showNotice(
+                    "Some dashboard information could not be loaded. " +
+                    failed.map(result => result.reason?.message || "Request failed").join(" ")
+                );
+            }
+        }
+
+        document.querySelectorAll("[data-section]").forEach(button => {
+            button.addEventListener("click", () => {
+                const sectionId = button.dataset.section;
+
+                document.querySelectorAll(".section").forEach(section => {
+                    section.classList.toggle("active", section.id === sectionId);
+                });
+
+                document.querySelectorAll("[data-section]").forEach(nav => {
+                    nav.classList.toggle("active", nav === button);
+                });
+
+                const titles = {
+                    overview: "Dashboard Overview",
+                    users: "User Management",
+                    transactions: "Transactions",
+                    profile: "Admin Profile"
+                };
+
+                document.getElementById("pageTitle").textContent =
+                    titles[sectionId] || "Dashboard";
+            });
+        });
+
+        document.querySelectorAll("[data-go]").forEach(button => {
+            button.addEventListener("click", () => {
+                document.querySelector(`[data-section="${button.dataset.go}"]`).click();
+            });
+        });
+
+        document.getElementById("logoutButton").addEventListener("click", logout);
+        document.getElementById("userSearch").addEventListener("input", renderUsers);
+        document.getElementById("transactionSearch").addEventListener(
+            "input", renderTransactionSearch
+        );
+
+        document.getElementById("refreshUsers").addEventListener("click", async () => {
+            try {
+                clearNotice();
+                await loadUsers();
+            } catch (error) {
+                showNotice(error.message);
+            }
+        });
+
+        document.getElementById("refreshTransactions").addEventListener(
+            "click", async () => {
+                try {
+                    clearNotice();
+                    await loadTransactions();
+                } catch (error) {
+                    showNotice(error.message);
+                }
+            }
+        );
+
+        document.getElementById("profileForm").addEventListener("submit", async event => {
+            event.preventDefault();
+            clearNotice();
+
+            const payload = {
+                username: document.getElementById("profileUsername").value.trim(),
+                email: document.getElementById("profileEmail").value.trim() || null
+            };
+
+            try {
+                await api("/admin/profile", {
+                    method: "PUT",
+                    body: JSON.stringify(payload)
+                });
+
+                await loadProfile();
+                showNotice("Admin profile updated successfully.");
+                notice.style.background = "#ecfdf3";
+                notice.style.color = "#067647";
+            } catch (error) {
+                showNotice(error.message);
+            }
+        });
+
+        if (token) {
+            loadDashboard();
+        }
+    </script>
+</body>
+</html>
