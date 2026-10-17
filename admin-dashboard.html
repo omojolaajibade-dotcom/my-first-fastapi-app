@@ -409,6 +409,12 @@
                 Transactions
             </button>
 
+
+            <button class="nav-button" data-section="audit-logs">
+                Audit Logs
+            </button>
+
+
             <p class="nav-label">Account</p>
 
             <button class="nav-button" data-section="profile">
@@ -550,6 +556,44 @@
                     </div>
                 </div>
             </section>
+
+
+<section class="section" id="audit-logs">
+    <div class="panel">
+        <div class="panel-header">
+            <h2>Admin Audit Logs</h2>
+            <div class="toolbar">
+                <button class="button" id="refreshAuditLogs">
+                    Refresh
+                </button>
+            </div>
+        </div>
+
+        <div class="table-wrap">
+            <table>
+                <thead>
+                    <tr>
+                        <th>ID</th>
+                        <th>Action</th>
+                        <th>Admin ID</th>
+                        <th>Reason</th>
+                        <th>Amount</th>
+                        <th>Reference</th>
+                        <th>Date &amp; Time</th>
+                    </tr>
+                </thead>
+                <tbody id="auditLogsTable">
+                    <tr>
+                        <td colspan="7" class="empty">
+                            Loading audit logs...
+                        </td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+</section>
+
 
             <section class="section" id="profile">
                 <div class="panel">
@@ -824,15 +868,67 @@
                 profile.username ?? "Administrator";
         }
 
+
+async function loadAuditLogs() {
+    const data = await api("/admin/audit-logs?limit=50");
+
+    const logs = getArray(data, [
+        "audit_logs",
+        "items",
+        "results"
+    ]);
+
+    const tableBody = document.getElementById("auditLogsTable");
+
+    if (!tableBody) {
+        throw new Error("Audit logs table was not found.");
+    }
+
+    if (logs.length === 0) {
+        tableBody.innerHTML = `
+            <tr>
+                <td colspan="7" class="empty">
+                    No audit logs found.
+                </td>
+            </tr>
+        `;
+        return;
+    }
+
+    tableBody.innerHTML = logs.map(log => `
+        <tr>
+            <td>${escapeHtml(log.id)}</td>
+            <td>${escapeHtml(log.action)}</td>
+            <td>${escapeHtml(log.admin_id)}</td>
+            <td>${escapeHtml(log.reason || "—")}</td>
+            <td>${escapeHtml(
+                log.amount == null
+                    ? "—"
+                    : formatMoney(log.amount)
+            )}</td>
+            <td>${escapeHtml(log.reference || "—")}</td>
+            <td>${escapeHtml(
+                log.created_at
+                    ? new Date(log.created_at).toLocaleString()
+                    : "—"
+            )}</td>
+        </tr>
+    `).join("");
+}
+
+
+
+
         async function loadDashboard() {
             clearNotice();
 
             const results = await Promise.allSettled([
-                loadOverview(),
-                loadUsers(),
-                loadTransactions(),
-                loadProfile()
-            ]);
+            loadOverview(),
+            loadUsers(),
+            loadTransactions(),
+            loadProfile(),
+            loadAuditLogs()
+    ]);
 
             const failed = results.filter(result => result.status === "rejected");
 
@@ -856,12 +952,15 @@
                     nav.classList.toggle("active", nav === button);
                 });
 
+
+
                 const titles = {
-                    overview: "Dashboard Overview",
-                    users: "User Management",
-                    transactions: "Transactions",
-                    profile: "Admin Profile"
-                };
+                            overview: "Dashboard Overview",
+                            users: "User Management",
+                            transactions: "Transactions",
+                            "audit-logs": "Audit Logs",
+                            profile: "Admin Profile"
+        };
 
                 document.getElementById("pageTitle").textContent =
                     titles[sectionId] || "Dashboard";
@@ -899,6 +998,20 @@
                 }
             }
         );
+
+
+document.getElementById("refreshAuditLogs").addEventListener(
+    "click",
+    async () => {
+        try {
+            clearNotice();
+            await loadAuditLogs();
+        } catch (error) {
+            showNotice(error.message);
+        }
+    }
+);
+
 
         document.getElementById("profileForm").addEventListener("submit", async event => {
             event.preventDefault();

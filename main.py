@@ -172,6 +172,64 @@ class Admin(Base):
     )
 
 
+
+# =========================
+# ADMIN AUDIT LOG MODEL
+# =========================
+
+class AdminAuditLog(Base):
+    __tablename__ = "admin_audit_logs"
+
+    id = Column(
+        Integer,
+        primary_key=True,
+        index=True
+    )
+
+
+    admin_id = Column(
+    Integer,
+    nullable=False,
+    index=True
+)
+
+
+    user_id = Column(
+        Integer,
+        nullable=True,
+        index=True
+    )
+
+    action = Column(
+        String,
+        nullable=False,
+        index=True
+    )
+
+    amount = Column(
+        Numeric,
+        nullable=True
+    )
+
+    reason = Column(
+        String,
+        nullable=True
+    )
+
+    reference = Column(
+        String,
+        nullable=True,
+        index=True
+    )
+
+    created_at = Column(
+        DateTime,
+        nullable=False,
+        server_default=func.current_timestamp(),
+        index=True
+    )
+
+
 # =========================
 # PASSWORD RESET TOKEN MODEL
 # =========================
@@ -643,6 +701,24 @@ def admin_login(
 
     access_token = create_admin_access_token(admin.id)
 
+
+
+    try:
+        db.add(
+            AdminAuditLog(
+                admin_id=admin.id,
+                action="admin_login",
+                reason="Admin logged in successfully."
+            )
+        )
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        print("ADMIN LOGIN AUDIT ERROR:", repr(e))
+        # Allow login to succeed even if audit logging fails.
+        pass
+
+
     return {
         "message": "Admin login successful.",
         "access_token": access_token,
@@ -698,8 +774,23 @@ def update_admin_profile(
         else None
     )
 
+
     db.commit()
     db.refresh(current_admin)
+
+
+    try:
+        db.add(
+            AdminAuditLog(
+                admin_id=current_admin.id,
+                action="admin_profile_updated",
+                reason="Admin updated their profile."
+            )
+        )
+        db.commit()
+    except Exception:
+        db.rollback()
+
 
     return {
         "message": "Admin profile updated successfully.",
@@ -905,6 +996,51 @@ def admin_get_transactions(
         }
         for transaction, user in transactions
     ]
+
+
+# =========================
+# ADMIN AUDIT LOGS
+# =========================
+
+@app.get("/admin/audit-logs")
+def get_admin_audit_logs(
+    limit: int = 50,
+    current_admin: Admin = Depends(get_current_admin),
+    db: Session = Depends(get_db)
+):
+    limit = max(1, min(limit, 100))
+
+    logs = (
+        db.query(AdminAuditLog)
+        .order_by(
+            AdminAuditLog.created_at.desc(),
+            AdminAuditLog.id.desc()
+        )
+        .limit(limit)
+        .all()
+    )
+
+    return {
+        "status": "success",
+        "count": len(logs),
+        "audit_logs": [
+            {
+                "id": log.id,
+                "admin_id": log.admin_id,
+                "user_id": log.user_id,
+                "action": log.action,
+                "amount": (
+                    float(log.amount)
+                    if log.amount is not None
+                    else None
+                ),
+                "reason": log.reason,
+                "reference": log.reference,
+                "created_at": log.created_at
+            }
+            for log in logs
+        ]
+    }
 
 
 
