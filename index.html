@@ -319,12 +319,13 @@
 
 <body>
 
-    <div class="login-container">
+    
+<div class="login-container" id="loginContainer">
 
-        <div class="logo">
-            <h1>Omotech</h1>
-            <p>Airtime & Data</p>
-        </div>
+    <div class="logo">
+        <h1>Omotech</h1>
+        <p>Airtime & Data</p>
+    </div>
 
 
         <!-- LOGIN CARD -->
@@ -475,8 +476,49 @@
     <label for="signupPhone">Phone Number</label>
     <input type="text" id="signupPhone" placeholder="Enter your phone number">
 
-    <label for="signupPassword">Password</label>
-    <input type="password" id="signupPassword" placeholder="Create a password">
+    
+<label for="signupEmail">Email Address</label>
+<input
+    type="email"
+    id="signupEmail"
+    placeholder="Enter your email address"
+    required
+>
+
+
+    
+<label for="signupPassword">Password</label>
+<div class="password-field">
+    <input
+        type="password"
+        id="signupPassword"
+        placeholder="Create a password"
+        required
+    >
+    <button
+        type="button"
+        onclick="togglePassword('signupPassword', this)"
+    >
+        Show
+    </button>
+</div>
+
+<label for="signupConfirmPassword">Confirm Password</label>
+<div class="password-field">
+    <input
+        type="password"
+        id="signupConfirmPassword"
+        placeholder="Re-enter your password"
+        required
+    >
+    <button
+        type="button"
+        onclick="togglePassword('signupConfirmPassword', this)"
+    >
+        Show
+    </button>
+</div>
+
 
     <button onclick="signup()">Create Account</button>
 
@@ -506,9 +548,10 @@
 
 
 
+
 <button
     type="button"
-    onclick="loadTransactions()"
+    onclick="showTransactions()"
     class="full-width-button"
 >
     Transaction History
@@ -518,17 +561,6 @@
 
 </div>
 
-
-<div id="transactions-section"></div>
-
-<button
-    type="button"
-    id="backFromTransactions"
-    class="secondary-button hidden"
-    onclick="showDashboardFromTransactions()"
->
-    Back to Dashboard
-</button>
 
 
 <a
@@ -546,6 +578,21 @@
         Logout
     </button>
 </div>
+
+<div class="login-container hidden" id="transactions-container">
+    <div id="transactions-section"></div>
+
+<button
+    type="button"
+    id="backFromTransactions"
+    class="secondary-button hidden"
+    onclick="showDashboardFromTransactions()"
+>
+    Back to Dashboard
+</button>
+
+</div>
+
 
 <div class="card hidden" id="airtimeCard">
     <h2>Buy Airtime</h2>
@@ -830,57 +877,81 @@ showDashboard(profile);
         }
 
 
+function showOnlyScreen(screenId) {
+    const screenIds = [
+        "loginCard",
+        "forgotCard",
+        "resetCard",
+        "signupCard",
+        "dashboardCard",
+        "airtimeCard",
+        "dataCard",
+        "walletCard",
+        "profileCard"
+    ];
+
+    screenIds.forEach(id => {
+        const screen = document.getElementById(id);
+        if (screen) {
+            screen.classList.toggle("hidden", id !== screenId);
+        }
+    });
+
+    const transactions = document.getElementById("transactions-section");
+    if (transactions) {
+        transactions.classList.toggle(
+            "hidden",
+            screenId !== "transactions-section"
+        );
+    }
+
+    const loginContainer = document.getElementById("loginContainer");
+    if (loginContainer) {
+        loginContainer.classList.toggle(
+            "hidden",
+            !["loginCard", "forgotCard", "resetCard"].includes(screenId)
+        );
+    }
+
+    const transactionContainer = document.getElementById("transactions-container");
+    if (transactionContainer) {
+        transactionContainer.classList.toggle(
+            "hidden",
+            screenId !== "transactions-section"
+        );
+    }
+}
+
+    
         // =========================
         // SHOW LOGIN
         // =========================
-
+        
         function showLogin() {
-
-            document
-                .getElementById("forgotCard")
-                .classList.add("hidden");
-
-            document
-                .getElementById("resetCard")
-                .classList.add("hidden");
-
-            document
-                .getElementById("loginCard")
-                .classList.remove("hidden");
-        }
-
-function showSignUp() {
-    document.getElementById("loginCard").classList.add("hidden");
-    document.getElementById("forgotCard").classList.add("hidden");
-    document.getElementById("resetCard").classList.add("hidden");
-    document.getElementById("signupCard").classList.remove("hidden");
+    showOnlyScreen("loginCard");
 }
 
+
+function showSignUp() {
+    showOnlyScreen("signupCard");
+}
+
+
 function showDashboard(user) {
-    document.getElementById("loginCard").classList.add("hidden");
-    document.getElementById("forgotCard").classList.add("hidden");
-    document.getElementById("resetCard").classList.add("hidden");
-    document.getElementById("signupCard").classList.add("hidden");
-
-    document.getElementById("dashboardCard").classList.remove("hidden");
-
+    showOnlyScreen("dashboardCard");
     document.getElementById("welcomeMessage").textContent =
         "Welcome, " + user.name + "!";
 }
 
 
 function showProfile() {
-    document.getElementById("dashboardCard").classList.add("hidden");
-    document.getElementById("walletCard").classList.add("hidden");
-    document.getElementById("airtimeCard").classList.add("hidden");
-    document.getElementById("profileCard").classList.remove("hidden");
-
+    showOnlyScreen("profileCard");
     loadProfile();
 }
 
+
 function showDashboardFromProfile() {
-    document.getElementById("profileCard").classList.add("hidden");
-    document.getElementById("dashboardCard").classList.remove("hidden");
+    showOnlyScreen("dashboardCard");
 }
 
 async function loadProfile() {
@@ -968,9 +1039,7 @@ async function updateProfile() {
 
 
 async function showWallet() {
-
-
-    document.getElementById("walletCard").classList.remove("hidden");
+    showOnlyScreen("walletCard");
 
     const balance = document.getElementById("walletBalance");
 
@@ -993,7 +1062,8 @@ async function showWallet() {
         const data = await response.json();
 
         if (!response.ok) {
-            balance.textContent = data.detail || "Unable to load wallet.";
+            balance.textContent =
+                data.detail || "Unable to load wallet.";
             return;
         }
 
@@ -1001,26 +1071,24 @@ async function showWallet() {
             "Balance: ₦" + Number(data.balance).toFixed(2);
 
     } catch (error) {
-        balance.textContent = "Unable to connect to the server.";
+        balance.textContent =
+            "Unable to connect to the server.";
         console.error(error);
     }
 }
 
-function showDashboardFromWallet() {
-    document.getElementById("walletCard").classList.add("hidden");
-    document.getElementById("dashboardCard").classList.remove("hidden");
-}
 
+function showDashboardFromWallet() {
+    showOnlyScreen("dashboardCard");
+}
 
 function showAirtime() {
-    document.getElementById("dashboardCard").classList.add("hidden");
-    document.getElementById("walletCard").classList.add("hidden");
-    document.getElementById("airtimeCard").classList.remove("hidden");
+    showOnlyScreen("airtimeCard");
 }
 
+
 function showDashboardFromAirtime() {
-    document.getElementById("airtimeCard").classList.add("hidden");
-    document.getElementById("dashboardCard").classList.remove("hidden");
+    showOnlyScreen("dashboardCard");
 }
 
 
@@ -1140,17 +1208,15 @@ async function fundWallet() {
 }
 
 function showData() {
-    document.getElementById("dashboardCard").classList.add("hidden");
-    document.getElementById("airtimeCard").classList.add("hidden");
-    document.getElementById("walletCard").classList.add("hidden");
-    document.getElementById("profileCard").classList.add("hidden");
-    document.getElementById("dataCard").classList.remove("hidden");
+    showOnlyScreen("dataCard");
 }
 
+
 function showDashboardFromData() {
-    document.getElementById("dataCard").classList.add("hidden");
-    document.getElementById("dashboardCard").classList.remove("hidden");
+    showOnlyScreen("dashboardCard");
 }
+
+
 
 function detectDataNetwork() {
     const phone = document.getElementById("dataPhone").value.trim();
@@ -1267,20 +1333,50 @@ message.textContent =
     "Details validated. Data purchase is not connected to the provider yet.";
 
 }
+
+
 function logout() {
     localStorage.removeItem("access_token");
 
-    document.getElementById("dashboardCard").classList.add("hidden");
-    document.getElementById("loginCard").classList.remove("hidden");
+    showOnlyScreen("loginCard");
 
     document.getElementById("result").textContent =
         "You have been logged out.";
 }
+
+
+function togglePassword(inputId, button) {
+    const passwordInput = document.getElementById(inputId);
+
+    if (passwordInput.type === "password") {
+        passwordInput.type = "text";
+        button.textContent = "Hide";
+    } else {
+        passwordInput.type = "password";
+        button.textContent = "Show";
+    }
+}
+
+
 async function signup() {
-    const name = document.getElementById("signupName").value;
-    const phone = document.getElementById("signupPhone").value;
+    const name = document.getElementById("signupName").value.trim();
+    const phone = document.getElementById("signupPhone").value.trim();
+    const email = document.getElementById("signupEmail").value.trim();
     const password = document.getElementById("signupPassword").value;
     const result = document.getElementById("signupResult");
+    
+const confirmPassword = document.getElementById("signupConfirmPassword").value;
+
+if (password !== confirmPassword) {
+    result.textContent = "Passwords do not match.";
+    return;
+}
+
+if (password.length < 8) {
+    result.textContent = "Password must be at least 8 characters.";
+    return;
+}
+
 
     result.textContent = "Creating account...";
 
@@ -1293,6 +1389,7 @@ async function signup() {
             body: JSON.stringify({
                 name: name,
                 phone: phone,
+                email: email,
                 password: password
             })
         });
@@ -1300,7 +1397,9 @@ async function signup() {
         const data = await response.json();
 
         if (!response.ok) {
-            result.textContent = data.detail || "Account creation failed.";
+            result.textContent = Array.isArray(data.detail)
+                ? data.detail.map(error => error.msg).join(", ")
+                : (data.detail || "Account creation failed.");
             return;
         }
 
@@ -1310,6 +1409,7 @@ async function signup() {
         console.error(error);
     }
 }
+
 
 
         // =========================
@@ -1632,12 +1732,24 @@ async function loadTransactions() {
     }
 }
 
+function showTransactions() {
+    showOnlyScreen("transactions-section");
+
+    const section = document.getElementById("transactions-section");
+    section.classList.remove("hidden");
+
+    loadTransactions();
+}
+
+
+
+
 function showDashboardFromTransactions() {
     document.getElementById("transactions-section").replaceChildren();
     document.getElementById("backFromTransactions").classList.add("hidden");
-    document.getElementById("walletCard").classList.add("hidden");
-    document.getElementById("dashboardCard").classList.remove("hidden");
+    showOnlyScreen("dashboardCard");
 }
+
 
     </script>
 
