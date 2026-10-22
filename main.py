@@ -23,7 +23,7 @@ from fastapi import Depends, FastAPI, HTTPException, Request, Query
 
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, RedirectResponse
 
 from pydantic import BaseModel, Field, EmailStr
 
@@ -596,11 +596,7 @@ def get_current_admin(
 
 @app.get("/")
 def home():
-
-    return {
-        "message": "Welcome to the Omotech Airtime & Data API"
-    }
-
+    return RedirectResponse(url="/app", status_code=302)
 
 # =========================
 # CREATE USER
