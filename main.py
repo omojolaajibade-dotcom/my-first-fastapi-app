@@ -19,7 +19,7 @@ import jwt
 
 from dotenv import load_dotenv
 
-from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Request, Query
 
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
@@ -42,7 +42,18 @@ from pwdlib import PasswordHash
 load_dotenv()
 
 
+# =========================
+# VTPASS SANDBOX CONFIGURATION
+# =========================
+
+VTPASS_BASE_URL = "https://sandbox.vtpass.com/api"
+VTPASS_API_KEY = os.getenv("VTPASS_API_KEY")
+VTPASS_PUBLIC_KEY = os.getenv("VTPASS_PUBLIC_KEY")
+VTPASS_SECRET_KEY = os.getenv("VTPASS_SECRET_KEY")
+
 DATABASE_URL = os.getenv("DATABASE_URL")
+
+
 
 if not DATABASE_URL:
     raise RuntimeError("DATABASE_URL is not configured")
@@ -165,6 +176,13 @@ class Admin(Base):
         default=True
     )
 
+    wallet_balance = Column(
+        Numeric(12, 2),
+        nullable=False,
+        default=Decimal("0.00"),
+        server_default="0.00"
+    )
+
     created_at = Column(
         DateTime,
         nullable=False,
@@ -201,10 +219,10 @@ class AdminAuditLog(Base):
     )
 
     action = Column(
-        String,
-        nullable=False,
-        index=True
-    )
+    String(50),
+    nullable=False,
+    index=True
+)
 
     amount = Column(
         Numeric,
@@ -212,15 +230,15 @@ class AdminAuditLog(Base):
     )
 
     reason = Column(
-        String,
-        nullable=True
+    String(255),
+    nullable=False
     )
 
     reference = Column(
-        String,
-        nullable=True,
-        index=True
-    )
+    String(100),
+    nullable=True,
+    unique=True
+)
 
     created_at = Column(
         DateTime,
@@ -271,25 +289,32 @@ class PasswordResetToken(Base):
     )
 
 
+
 class WalletTransaction(Base):
     __tablename__ = "wallet_transactions"
 
     id = Column(Integer, primary_key=True, index=True)
-    user_id = Column(Integer, nullable=False)
-    transaction_type = Column(String(20), nullable=False)
+
+    # A transaction belongs to a customer OR an admin.
+    user_id = Column(Integer, nullable=True, index=True)
+    admin_id = Column(Integer, nullable=True, index=True)
+
+    transaction_type = Column(String(30), nullable=False)
     amount = Column(Numeric(12, 2), nullable=False)
     status = Column(String(20), nullable=False, default="pending")
     reference = Column(String(100), unique=True, nullable=False)
-    gateway = Column(String(20), nullable=True)
+    gateway = Column(String(30), nullable=True)
+
     created_at = Column(
         DateTime,
         nullable=False,
         server_default=func.current_timestamp()
     )
 
-
-# Make sure required tables exist
-Base.metadata.create_all(bind=engine)
+# Create tables during normal startup, but let Alembic
+# manage schema changes when running migrations.
+if os.getenv("OMOTECH_SKIP_CREATE_ALL") != "1":
+    Base.metadata.create_all(bind=engine)
 
 # =========================
 # FASTAPI APP
@@ -730,6 +755,147 @@ def admin_login(
     }
 
 
+
+@app.get("/admin/wallet")
+def get_admin_wallet(
+    current_admin: Admin = Depends(get_current_admin)
+):
+    return {
+        "admin_id": current_admin.id,
+        "admin_username": current_admin.username,
+        "balance": float(current_admin.wallet_balance)
+    }
+
+
+@app.post("/admin/wallet/fund")
+def initialize_admin_wallet_funding(
+    request: FundWalletRequest,
+    current_admin: Admin = Depends(get_current_admin),
+    db: Session = Depends(get_db)
+):
+    if not PAYSTACK_SECRET_KEY:
+        raise HTTPException(
+            status_code=503,
+            detail="Payment service is not configured."
+        )
+
+    if not current_admin.email or not current_admin.email.strip():
+        raise HTTPException(
+            status_code=400,
+            detail="Please add an email address to your admin profile."
+        )
+
+    amount = Decimal(str(request.amount))
+
+    if amount != amount.quantize(Decimal("0.01")):
+        raise HTTPException(
+            status_code=400,
+            detail="Amount must have no more than two decimal places."
+        )
+
+    reference = secrets.token_urlsafe(24)
+
+    transaction = WalletTransaction(
+        user_id=None,
+        admin_id=current_admin.id,
+        transaction_type="funding",
+        amount=amount,
+        status="pending",
+        reference=reference,
+        gateway="paystack"
+    )
+
+    audit_log = AdminAuditLog(
+        admin_id=current_admin.id,
+        user_id=None,
+        action="admin_wallet_funding_initialized",
+        amount=amount,
+        reason="Admin wallet funding initiated through Paystack",
+        reference=reference
+    )
+
+    try:
+        db.add(transaction)
+        db.add(audit_log)
+        db.commit()
+        db.refresh(transaction)
+    except Exception:
+        db.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to create the admin funding transaction."
+        )
+
+    payload = {
+        "email": current_admin.email.strip(),
+        "amount": int(amount * Decimal("100")),
+        "reference": reference,
+         "callback_url": (
+        "https://omotech-airtime-data.onrender.com/payment-success?flow=admin"
+    ),
+        "metadata": {
+            "owner_type": "admin",
+            "admin_id": current_admin.id,
+            "transaction_id": transaction.id
+        }
+    }
+
+    try:
+        response = requests.post(
+            f"{PAYSTACK_BASE_URL}/transaction/initialize",
+            json=payload,
+            headers={
+                "Authorization": f"Bearer {PAYSTACK_SECRET_KEY}",
+                "Content-Type": "application/json"
+            },
+            timeout=15
+        )
+        response.raise_for_status()
+        result = response.json()
+
+    except (requests.RequestException, ValueError):
+        # Keep the transaction pending if the outcome is uncertain.
+        raise HTTPException(
+            status_code=502,
+            detail=(
+                "Unable to confirm payment initialization. "
+                "Check the transaction history before retrying."
+            )
+        )
+
+    if not result.get("status"):
+        transaction.status = "failed"
+        try:
+            db.commit()
+        except Exception:
+            db.rollback()
+
+        raise HTTPException(
+            status_code=502,
+            detail="Paystack could not initialize the payment."
+        )
+
+    authorization_url = (
+        (result.get("data") or {}).get("authorization_url")
+    )
+
+    if not authorization_url:
+        raise HTTPException(
+            status_code=502,
+            detail="Paystack did not return a payment URL."
+        )
+
+    return {
+        "message": "Admin wallet funding initialized.",
+        "status": "pending",
+        "reference": reference,
+        "amount": float(amount),
+        "authorization_url": authorization_url
+    }
+
+
+
+
 # =========================
 # ADMIN PROFILE MANAGEMENT
 # =========================
@@ -972,29 +1138,44 @@ def admin_get_transactions(
     db: Session = Depends(get_db)
 ):
     transactions = (
-        db.query(WalletTransaction, User)
-        .join(
+        db.query(WalletTransaction, User, Admin)
+        .outerjoin(
             User,
             WalletTransaction.user_id == User.id
         )
-        .order_by(WalletTransaction.created_at.desc())
+        .outerjoin(
+            Admin,
+            WalletTransaction.admin_id == Admin.id
+        )
+        .order_by(
+            WalletTransaction.created_at.desc(),
+            WalletTransaction.id.desc()
+        )
         .all()
     )
 
     return [
         {
             "transaction_id": transaction.id,
-            "user_id": user.id,
-            "user_name": user.name,
-            "user_phone": user.phone,
-            "user_email": user.email,
+            "owner_type": (
+                "customer" if transaction.user_id is not None
+                else "admin" if transaction.admin_id is not None
+                else "unknown"
+            ),
+            "user_id": user.id if user else None,
+            "user_name": user.name if user else None,
+            "user_phone": user.phone if user else None,
+            "user_email": user.email if user else None,
+            "admin_id": admin.id if admin else None,
+            "admin_username": admin.username if admin else None,
             "transaction_type": transaction.transaction_type,
             "amount": float(transaction.amount),
             "status": transaction.status,
             "reference": transaction.reference,
+            "gateway": transaction.gateway,
             "created_at": transaction.created_at
         }
-        for transaction, user in transactions
+        for transaction, user, admin in transactions
     ]
 
 
@@ -1003,13 +1184,11 @@ def admin_get_transactions(
 # =========================
 
 @app.get("/admin/audit-logs")
-def get_admin_audit_logs(
-    limit: int = 50,
+def admin_get_audit_logs(
+    limit: int = Query(default=50, ge=1, le=200),
     current_admin: Admin = Depends(get_current_admin),
     db: Session = Depends(get_db)
 ):
-    limit = max(1, min(limit, 100))
-
     logs = (
         db.query(AdminAuditLog)
         .order_by(
@@ -1020,29 +1199,22 @@ def get_admin_audit_logs(
         .all()
     )
 
-    return {
-        "status": "success",
-        "count": len(logs),
-        "audit_logs": [
-            {
-                "id": log.id,
-                "admin_id": log.admin_id,
-                "user_id": log.user_id,
-                "action": log.action,
-                "amount": (
-                    float(log.amount)
-                    if log.amount is not None
-                    else None
-                ),
-                "reason": log.reason,
-                "reference": log.reference,
-                "created_at": log.created_at
-            }
-            for log in logs
-        ]
-    }
-
-
+    return [
+        {
+            "id": log.id,
+            "action": log.action,
+            "admin_id": log.admin_id,
+            "reason": log.reason,
+            "amount": (
+                float(log.amount)
+                if log.amount is not None
+                else None
+            ),
+            "reference": log.reference,
+            "created_at": log.created_at
+        }
+        for log in logs
+    ]
 
 
 # =========================
@@ -1331,11 +1503,12 @@ def verify_wallet_funding(
             detail="Wallet verification failed. Please retry."
         )
 
+
 # =========================
 # PAYSTACK WEBHOOK
 # =========================
-
 @app.post("/payments/paystack/webhook")
+@app.post("/paystack/webhook")
 async def paystack_webhook(
     request: Request,
     db: Session = Depends(get_db)
@@ -1346,7 +1519,7 @@ async def paystack_webhook(
             detail="Payment service is not configured."
         )
 
-    # 1. Verify the webhook signature using the raw request body.
+    # 1. Verify the signature using the original request body.
     body = await request.body()
     signature = request.headers.get("x-paystack-signature", "")
 
@@ -1364,7 +1537,7 @@ async def paystack_webhook(
             detail="Invalid Paystack webhook signature."
         )
 
-    # 2. Parse the event.
+    # 2. Parse the webhook event.
     try:
         event_data = json.loads(body)
     except (json.JSONDecodeError, UnicodeDecodeError):
@@ -1373,7 +1546,6 @@ async def paystack_webhook(
             detail="Invalid webhook payload."
         )
 
-    # We only process successful payments here.
     if event_data.get("event") != "charge.success":
         return {"status": "received"}
 
@@ -1386,8 +1558,8 @@ async def paystack_webhook(
             detail="Payment reference is missing."
         )
 
+    # 3. Verify the transaction independently with Paystack.
     try:
-        # 3. Independently verify the payment with Paystack.
         response = requests.get(
             f"{PAYSTACK_BASE_URL}/transaction/verify/{reference}",
             headers={
@@ -1395,37 +1567,33 @@ async def paystack_webhook(
             },
             timeout=30
         )
-
-        if not response.ok:
-            raise HTTPException(
-                status_code=502,
-                detail="Paystack verification request failed."
-            )
-
+        response.raise_for_status()
         result = response.json()
 
-        if not result.get("status"):
-            raise HTTPException(
-                status_code=502,
-                detail="Paystack could not verify the payment."
-            )
-
-        payment = result.get("data") or {}
-
+    except requests.Timeout:
+        raise HTTPException(
+            status_code=504,
+            detail="Paystack verification timed out."
+        )
     except requests.RequestException:
-        db.rollback()
         raise HTTPException(
             status_code=502,
             detail="Unable to contact Paystack."
         )
     except ValueError:
-        db.rollback()
         raise HTTPException(
             status_code=502,
             detail="Invalid response from Paystack."
         )
 
-    # 4. Confirm the verified payment details.
+    if not result.get("status"):
+        raise HTTPException(
+            status_code=502,
+            detail="Paystack could not verify the payment."
+        )
+
+    payment = result.get("data") or {}
+
     if (
         payment.get("status") != "success"
         or payment.get("reference") != reference
@@ -1436,82 +1604,129 @@ async def paystack_webhook(
             detail="Payment verification failed."
         )
 
-    # 5. Lock the transaction to prevent duplicate credits.
+    if payment.get("currency") != "NGN":
+        raise HTTPException(
+            status_code=400,
+            detail="Payment currency does not match."
+        )
+
+    # 4. Find and lock the funding transaction.
     try:
-        transaction = db.query(WalletTransaction).filter(
-            WalletTransaction.reference == reference,
-            WalletTransaction.transaction_type == "funding"
-        ).with_for_update().first()
+        transaction = (
+            db.query(WalletTransaction)
+            .filter(
+                WalletTransaction.reference == reference,
+                WalletTransaction.transaction_type == "funding",
+                WalletTransaction.gateway == "paystack"
+            )
+            .with_for_update()
+            .first()
+        )
 
         if not transaction:
-            db.rollback()
             raise HTTPException(
                 status_code=404,
                 detail="Funding transaction not found."
             )
 
-        if transaction.gateway != "paystack":
-            db.rollback()
-            return {"status": "received"}
+        # A transaction must belong to exactly one account.
+        is_customer_transaction = transaction.user_id is not None
+        is_admin_transaction = transaction.admin_id is not None
 
+        if is_customer_transaction == is_admin_transaction:
+            raise HTTPException(
+                status_code=400,
+                detail="Transaction ownership is invalid."
+            )
 
-        # Paystack may send the same webhook more than once.
+        # Ignore duplicate webhook deliveries.
         if transaction.status == "success":
-            db.commit()
+            db.rollback()
             return {"status": "received"}
 
         if transaction.status != "pending":
             db.rollback()
             return {"status": "received"}
 
-        expected_kobo = int(transaction.amount * 100)
+        # 5. Validate the amount against the pending transaction.
+        expected_kobo = int(
+            Decimal(str(transaction.amount)) * Decimal("100")
+        )
 
         if payment.get("amount") != expected_kobo:
-            db.rollback()
             raise HTTPException(
                 status_code=400,
                 detail="Payment amount does not match."
             )
 
-        if payment.get("currency") != "NGN":
-            db.rollback()
-            raise HTTPException(
-                status_code=400,
-                detail="Payment currency does not match."
-            )
-
-        user = db.query(User).filter(
-            User.id == transaction.user_id
-        ).with_for_update().first()
-
-        if not user or not user.email:
-            db.rollback()
-            raise HTTPException(
-                status_code=400,
-                detail="Funding user or email not found."
-            )
-
         customer_email = (
-            payment.get("customer", {}).get("email", "")
-            .strip().lower()
-        )
+            (payment.get("customer") or {}).get("email") or ""
+        ).strip().lower()
 
-        if customer_email != user.email.strip().lower():
-            db.rollback()
-            raise HTTPException(
-                status_code=400,
-                detail="Payment email does not match."
+        # 6. Credit the correct wallet.
+        if is_customer_transaction:
+            user = (
+                db.query(User)
+                .filter(User.id == transaction.user_id)
+                .with_for_update()
+                .first()
             )
 
-        # 6. Credit the wallet and mark the transaction atomically.
-        user.wallet_balance += transaction.amount
-        transaction.status = "success"
+            if not user or not user.email:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Funding user or email not found."
+                )
 
+            if customer_email != user.email.strip().lower():
+                raise HTTPException(
+                    status_code=400,
+                    detail="Payment email does not match."
+                )
+
+            user.wallet_balance += transaction.amount
+
+        else:
+            admin = (
+                db.query(Admin)
+                .filter(Admin.id == transaction.admin_id)
+                .with_for_update()
+                .first()
+            )
+
+            if not admin or not admin.email:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Funding admin or email not found."
+                )
+
+            if customer_email != admin.email.strip().lower():
+                raise HTTPException(
+                    status_code=400,
+                    detail="Payment email does not match."
+                )
+
+            admin.wallet_balance += transaction.amount
+
+            db.add(
+                AdminAuditLog(
+                    admin_id=admin.id,
+                    user_id=None,
+                    action="admin_wallet_funding_completed",
+                    amount=transaction.amount,
+                    reason="Paystack webhook verified admin funding",
+                    reference=reference
+                )
+            )
+
+        # Commit wallet credit and transaction status together.
+        transaction.status = "success"
         db.commit()
 
         return {"status": "received"}
 
     except HTTPException:
+        db.rollback()
         raise
     except Exception:
         db.rollback()
@@ -1519,6 +1734,7 @@ async def paystack_webhook(
             status_code=500,
             detail="Unable to process Paystack webhook."
         )
+
 
 
 @app.get("/transactions")
@@ -1603,27 +1819,69 @@ def admin_overview(
         }
     }
 
-
-
 @app.post("/paystack/initialize")
 def initialize_paystack_payment(
     request: FundWalletRequest,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
+    # Check payment configuration.
+    if not PAYSTACK_SECRET_KEY:
+        raise HTTPException(
+            status_code=503,
+            detail="Payment service is not configured."
+        )
+
+    # Paystack requires an email address.
+    if not current_user.email or not current_user.email.strip():
+        raise HTTPException(
+            status_code=400,
+            detail="Please add an email address to your profile before funding your wallet."
+        )
+
+    # Reject amounts that cannot be represented exactly in kobo.
+    if request.amount != request.amount.quantize(Decimal("0.01")):
+        raise HTTPException(
+            status_code=400,
+            detail="Amount must have no more than two decimal places."
+        )
+
     reference = secrets.token_urlsafe(24)
 
+    # Save the pending transaction before contacting Paystack.
+    transaction = WalletTransaction(
+        user_id=current_user.id,
+        transaction_type="funding",
+        amount=request.amount,
+        status="pending",
+        reference=reference,
+        gateway="paystack"
+    )
+
+    try:
+        db.add(transaction)
+        db.commit()
+        db.refresh(transaction)
+    except Exception:
+        db.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to create the payment transaction."
+        )
+
     payload = {
-    "email": current_user.email,
-    "amount": int(request.amount * Decimal("100")),
-    "reference": reference,
-    "callback_url": "https://handbags-heating-importance-tools.trycloudflare.com/payment-success",
-}
+        "email": current_user.email.strip(),
+        "amount": int(request.amount * Decimal("100")),
+        "reference": reference,
+       "callback_url": (
+    "https://omotech-airtime-data.onrender.com/payment-success"
+),
+    }
+
     headers = {
         "Authorization": f"Bearer {PAYSTACK_SECRET_KEY}",
         "Content-Type": "application/json"
     }
-
 
     try:
         response = requests.post(
@@ -1633,9 +1891,19 @@ def initialize_paystack_payment(
             timeout=15
         )
 
-        data = response.json()
+        try:
+            data = response.json()
+        except ValueError:
+            # Keep the transaction pending because the outcome is uncertain.
+            raise HTTPException(
+                status_code=502,
+                detail="Paystack returned an invalid response. Check the transaction status before retrying."
+            )
 
         if not response.ok or not data.get("status"):
+            transaction.status = "failed"
+            db.commit()
+
             raise HTTPException(
                 status_code=502,
                 detail=data.get(
@@ -1644,233 +1912,227 @@ def initialize_paystack_payment(
                 )
             )
 
+        payment_data = data.get("data", {})
+
+        if (
+            payment_data.get("reference") != reference
+            or not payment_data.get("authorization_url")
+        ):
+            raise HTTPException(
+                status_code=502,
+                detail="Paystack returned incomplete payment details. Check the transaction status before retrying."
+            )
+
+        return {
+            "authorization_url": payment_data["authorization_url"],
+            "reference": reference,
+            "amount": float(transaction.amount),
+            "status": transaction.status
+        }
+
     except requests.Timeout:
+        # Do not mark failed: Paystack may have initialized the payment
+        # even though the response timed out.
         raise HTTPException(
             status_code=504,
-            detail="Paystack request timed out. Please try again."
+            detail="Paystack timed out. Check your transaction history before trying again."
         )
 
     except requests.RequestException:
+        # The result may be uncertain, so retain the pending transaction.
         raise HTTPException(
             status_code=502,
-            detail="Unable to connect to Paystack. Please try again."
+            detail="Unable to contact Paystack. Check your transaction history before trying again."
         )
-
-    except ValueError:
-        raise HTTPException(
-            status_code=502,
-            detail="Paystack returned an invalid response."
-        )
-
-
-    transaction = WalletTransaction(
-    user_id=current_user.id,
-    transaction_type="funding",
-    amount=request.amount,
-    status="pending",
-    reference=data["data"]["reference"],
-    gateway="paystack"
-)
-
-    db.add(transaction)
-    db.commit()
-    db.refresh(transaction)
-
-    return {
-        "authorization_url": data["data"]["authorization_url"],
-        "reference": data["data"]["reference"],
-        "amount": float(transaction.amount),
-        "status": transaction.status
-    }
-
-
-@app.post("/paystack/webhook")
-async def paystack_webhook(
-    request: Request,
-    db: Session = Depends(get_db)
-):
-    # Read the original request body for signature verification.
-    raw_body = await request.body()
-
-    signature = request.headers.get("x-paystack-signature")
-
-    if not signature:
-        raise HTTPException(
-            status_code=401,
-            detail="Missing Paystack signature"
-        )
-
-    expected_signature = hmac.new(
-        PAYSTACK_SECRET_KEY.encode("utf-8"),
-        raw_body,
-        hashlib.sha512
-    ).hexdigest()
-
-    if not hmac.compare_digest(signature, expected_signature):
-        raise HTTPException(
-            status_code=401,
-            detail="Invalid Paystack signature"
-        )
-
-    try:
-        payload = json.loads(raw_body)
-    except (json.JSONDecodeError, UnicodeDecodeError):
-        raise HTTPException(
-            status_code=400,
-            detail="Invalid webhook payload"
-        )
-
-    # Process successful charge events only.
-    if payload.get("event") != "charge.success":
-        return {"status": "ignored"}
-
-    payment_data = payload.get("data", {})
-
-    if payment_data.get("status") != "success":
-        return {
-            "status": "ignored",
-            "message": "Payment has not succeeded"
-        }
-
-    reference = payment_data.get("reference")
-
-    if not reference:
-        raise HTTPException(
-            status_code=400,
-            detail="Missing payment reference"
-        )
-
-    # Confirm the payment directly with Paystack.
-    try:
-        verification_response = requests.get(
-            f"{PAYSTACK_BASE_URL}/transaction/verify/{reference}",
-            headers={
-                "Authorization": f"Bearer {PAYSTACK_SECRET_KEY}"
-            },
-            timeout=15
-        )
-        verification_response.raise_for_status()
-        verification_result = verification_response.json()
-
-    except requests.RequestException:
-        db.rollback()
-        raise HTTPException(
-            status_code=502,
-            detail="Unable to verify payment with Paystack"
-        )
-
-    verified_payment = verification_result.get("data", {})
-
-    if (
-        not verification_result.get("status")
-        or verified_payment.get("status") != "success"
-        or verified_payment.get("reference") != reference
-        or verified_payment.get("currency") != "NGN"
-    ):
-        return {
-            "status": "ignored",
-            "message": "Paystack verification did not confirm payment"
-        }
-
-    # Lock the transaction to prevent duplicate wallet credits.
-    try:
-        transaction = (
-            db.query(WalletTransaction)
-            .filter(WalletTransaction.reference == reference)
-            .with_for_update()
-            .first()
-        )
-
-        if not transaction:
-            return {
-                "status": "ignored",
-                "reason": "Unknown reference"
-            }
-
-        if transaction.transaction_type != "funding":
-            return {
-                "status": "ignored",
-                "reason": "Not a wallet funding transaction"
-            }
-
-        if transaction.gateway != "paystack":
-            return {
-                "status": "ignored",
-                "reason": "Transaction does not belong to Paystack"
-            }
-
-        if transaction.status == "success":
-            return {
-                "status": "success",
-                "message": "Payment has already been credited"
-            }
-
-        if transaction.status != "pending":
-            return {
-                "status": "ignored",
-                "message": "Transaction is not pending"
-            }
-
-        # Validate the verified amount and currency.
-        if verified_payment.get("currency") != "NGN":
-            raise HTTPException(
-                status_code=400,
-                detail="Payment currency does not match"
-            )
-
-        paystack_amount = (
-            Decimal(str(verified_payment.get("amount", 0)))
-            / Decimal("100")
-        )
-        transaction_amount = Decimal(str(transaction.amount))
-
-        if paystack_amount != transaction_amount:
-            raise HTTPException(
-                status_code=400,
-                detail="Payment amount does not match the transaction"
-            )
-
-        # Credit the wallet and update the transaction atomically.
-        result = db.execute(
-            update(User)
-            .where(User.id == transaction.user_id)
-            .values(
-                wallet_balance=(
-                    User.wallet_balance + transaction.amount
-                )
-            )
-        )
-
-        if result.rowcount != 1:
-            raise HTTPException(
-                status_code=404,
-                detail="Wallet owner not found"
-            )
-
-        transaction.status = "success"
-        db.commit()
-
-        return {
-            "status": "success",
-            "message": "Payment verified and wallet credited"
-        }
 
     except HTTPException:
-        db.rollback()
         raise
 
     except Exception:
         db.rollback()
         raise HTTPException(
             status_code=500,
-            detail="Unable to process Paystack webhook"
+            detail="An unexpected error occurred while initializing payment."
         )
 
-
-
+   
 @app.get("/payment-success")
 def payment_success(reference: str):
     return FileResponse("payment-success.html")
+
+
+@app.post("/admin/wallet/verify/{reference}")
+def verify_admin_wallet_funding(
+    reference: str,
+    current_admin: Admin = Depends(get_current_admin),
+    db: Session = Depends(get_db)
+):
+    if not PAYSTACK_SECRET_KEY:
+        raise HTTPException(
+            status_code=503,
+            detail="Payment service is not configured."
+        )
+
+    try:
+        response = requests.get(
+            f"{PAYSTACK_BASE_URL}/transaction/verify/{reference}",
+            headers={
+                "Authorization": f"Bearer {PAYSTACK_SECRET_KEY}"
+            },
+            timeout=15
+        )
+        response.raise_for_status()
+        result = response.json()
+
+    except requests.Timeout:
+        raise HTTPException(
+            status_code=504,
+            detail="Paystack verification timed out. Please try again."
+        )
+    except (requests.RequestException, ValueError):
+        raise HTTPException(
+            status_code=502,
+            detail="Unable to verify payment with Paystack."
+        )
+
+    payment = result.get("data") or {}
+
+    if not result.get("status"):
+        raise HTTPException(
+            status_code=502,
+            detail="Paystack could not verify the payment."
+        )
+
+    if payment.get("status") != "success":
+        return {
+            "message": "Payment has not been completed.",
+            "status": payment.get("status"),
+            "reference": reference
+        }
+
+    if payment.get("reference") != reference:
+        raise HTTPException(
+            status_code=400,
+            detail="Payment reference mismatch."
+        )
+
+    if payment.get("currency") != "NGN":
+        raise HTTPException(
+            status_code=400,
+            detail="Payment currency is not supported."
+        )
+
+    payment_email = (
+        (payment.get("customer") or {}).get("email") or ""
+    ).strip().lower()
+
+    admin_email = (current_admin.email or "").strip().lower()
+
+    if not admin_email or payment_email != admin_email:
+        raise HTTPException(
+            status_code=400,
+            detail="Payment email does not match the admin account."
+        )
+
+    try:
+        transaction = (
+            db.query(WalletTransaction)
+            .filter(
+                WalletTransaction.reference == reference,
+                WalletTransaction.admin_id == current_admin.id,
+                WalletTransaction.user_id.is_(None)
+            )
+            .with_for_update()
+            .first()
+        )
+
+        if not transaction:
+            raise HTTPException(
+                status_code=404,
+                detail="Admin funding transaction not found."
+            )
+
+        if (
+            transaction.transaction_type != "funding"
+            or transaction.gateway != "paystack"
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail="This is not a valid admin funding transaction."
+            )
+
+        if transaction.status == "success":
+            return {
+                "message": "Payment has already been credited.",
+                "status": "success",
+                "reference": reference,
+                "amount": float(transaction.amount),
+                "wallet_balance": float(current_admin.wallet_balance)
+            }
+
+        if transaction.status != "pending":
+            raise HTTPException(
+                status_code=400,
+                detail="This transaction cannot be credited."
+            )
+
+        paystack_amount = (
+            Decimal(str(payment.get("amount", 0)))
+            / Decimal("100")
+        )
+
+        if paystack_amount != Decimal(str(transaction.amount)):
+            raise HTTPException(
+                status_code=400,
+                detail="Payment amount does not match the transaction."
+            )
+
+        db.execute(
+            update(Admin)
+            .where(Admin.id == current_admin.id)
+            .values(
+                wallet_balance=(
+                    Admin.wallet_balance + transaction.amount
+                )
+            )
+        )
+
+        transaction.status = "success"
+
+        db.add(
+            AdminAuditLog(
+                admin_id=current_admin.id,
+                user_id=None,
+                action="admin_wallet_funding_completed",
+                amount=transaction.amount,
+                reason="Paystack funding verified successfully",
+                reference=reference
+            )
+        )
+
+        db.commit()
+        db.refresh(current_admin)
+        db.refresh(transaction)
+
+        return {
+            "message": "Admin wallet funded successfully.",
+            "status": transaction.status,
+            "reference": transaction.reference,
+            "amount": float(transaction.amount),
+            "wallet_balance": float(current_admin.wallet_balance)
+        }
+
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception:
+        db.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to process admin payment verification."
+        )
+
+
 
 
 @app.get("/paystack/verify/{reference}")
@@ -1879,36 +2141,46 @@ def verify_paystack_payment(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    headers = {
-        "Authorization": f"Bearer {PAYSTACK_SECRET_KEY}"
-    }
+    if not PAYSTACK_SECRET_KEY:
+        raise HTTPException(
+            status_code=503,
+            detail="Payment service is not configured."
+        )
 
     try:
         response = requests.get(
             f"{PAYSTACK_BASE_URL}/transaction/verify/{reference}",
-            headers=headers,
+            headers={
+                "Authorization": f"Bearer {PAYSTACK_SECRET_KEY}"
+            },
             timeout=15
         )
         response.raise_for_status()
         data = response.json()
 
-        print("VERIFY PAYSTACK HTTP STATUS:", response.status_code)
-        print("VERIFY PAYSTACK STATUS:", data.get("status"))
-        print("VERIFY PAYSTACK MESSAGE:", data.get("message"))
-
-    except requests.RequestException as exc:
-         print("PAYSTACK VERIFICATION REQUEST ERROR:", repr(exc))
-         raise HTTPException(
+    except requests.Timeout:
+        raise HTTPException(
+            status_code=504,
+            detail="Paystack verification timed out. Please try again."
+        )
+    except requests.RequestException:
+        raise HTTPException(
             status_code=502,
-            detail="Unable to contact Paystack. Please check the server logs."
+            detail="Unable to contact Paystack."
+        )
+    except ValueError:
+        raise HTTPException(
+            status_code=502,
+            detail="Paystack returned an invalid response."
         )
 
     if not data.get("status"):
         raise HTTPException(
-        status_code=502,
-        detail="Paystack returned an invalid verification response."
-    )
-    payment_data = data.get("data", {})
+            status_code=502,
+            detail="Paystack could not verify the payment."
+        )
+
+    payment_data = data.get("data") or {}
 
     if payment_data.get("status") != "success":
         return {
@@ -1929,89 +2201,112 @@ def verify_paystack_payment(
             detail="Payment currency is not supported."
         )
 
-    transaction = (
-        db.query(WalletTransaction)
-        .filter(
-            WalletTransaction.reference == reference,
-            WalletTransaction.user_id == current_user.id
-        )
-        .with_for_update()
-        .first()
-    )
-
-    if not transaction:
-        raise HTTPException(
-            status_code=404,
-            detail="Wallet transaction not found."
-        )
-
-
-    if transaction.transaction_type != "funding":
+    if not current_user.email or not current_user.email.strip():
         raise HTTPException(
             status_code=400,
-            detail="Transaction is not a wallet funding transaction."
+            detail="Please add an email address to your profile."
         )
 
-    if transaction.gateway != "paystack":
+    customer_email = (
+        (payment_data.get("customer") or {}).get("email") or ""
+    ).strip().lower()
+
+    if customer_email != current_user.email.strip().lower():
         raise HTTPException(
             status_code=400,
-            detail="This transaction does not belong to Paystack."
-        )
-
-
-    if transaction.status == "success":
-        return {
-            "message": "Payment has already been credited.",
-            "status": "success",
-            "reference": reference,
-            "amount": float(transaction.amount)
-        }
-
-    if transaction.status != "pending":
-        raise HTTPException(
-            status_code=400,
-            detail="This transaction cannot be credited."
-        )
-
-    paystack_amount = (
-        Decimal(str(payment_data.get("amount", 0)))
-        / Decimal("100")
-    )
-    transaction_amount = Decimal(str(transaction.amount))
-
-    if transaction_amount != paystack_amount:
-        raise HTTPException(
-            status_code=400,
-            detail="Payment amount does not match the wallet transaction."
+            detail="Payment email does not match your account."
         )
 
     try:
-        db.execute(
+        transaction = (
+            db.query(WalletTransaction)
+            .filter(
+                WalletTransaction.reference == reference,
+                WalletTransaction.user_id == current_user.id
+            )
+            .with_for_update()
+            .first()
+        )
+
+        if not transaction:
+            raise HTTPException(
+                status_code=404,
+                detail="Wallet transaction not found."
+            )
+
+        if (
+            transaction.transaction_type != "funding"
+            or transaction.gateway != "paystack"
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail="This is not a valid Paystack funding transaction."
+            )
+
+        if transaction.status == "success":
+            db.commit()
+            return {
+                "message": "Payment has already been credited.",
+                "status": "success",
+                "reference": reference,
+                "amount": float(transaction.amount)
+            }
+
+        if transaction.status != "pending":
+            raise HTTPException(
+                status_code=400,
+                detail="This transaction cannot be credited."
+            )
+
+        paystack_amount = (
+            Decimal(str(payment_data.get("amount", 0)))
+            / Decimal("100")
+        )
+        transaction_amount = Decimal(str(transaction.amount))
+
+        if transaction_amount != paystack_amount:
+            raise HTTPException(
+                status_code=400,
+                detail="Payment amount does not match the wallet transaction."
+            )
+
+        result = db.execute(
             update(User)
-            .where(User.id == current_user.id)
+            .where(User.id == transaction.user_id)
             .values(
                 wallet_balance=User.wallet_balance + transaction.amount
             )
         )
 
+        if result.rowcount != 1:
+            raise HTTPException(
+                status_code=404,
+                detail="Wallet owner not found."
+            )
+
         transaction.status = "success"
         db.commit()
 
-    except Exception:
+        db.refresh(current_user)
+        db.refresh(transaction)
+
+        return {
+            "message": "Payment verified and wallet credited successfully.",
+            "status": transaction.status,
+            "reference": transaction.reference,
+            "amount": float(transaction.amount),
+            "wallet_balance": float(current_user.wallet_balance)
+        }
+
+    except HTTPException:
         db.rollback()
         raise
-
-    db.refresh(current_user)
-    db.refresh(transaction)
-
-    return {
-        "message": "Payment verified and wallet credited successfully.",
-        "status": transaction.status,
-        "reference": transaction.reference,
-        "amount": float(transaction.amount),
-        "wallet_balance": float(current_user.wallet_balance)
-    }
-
+    except Exception:
+        db.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to process payment verification."
+        )
 
 
 # =========================
