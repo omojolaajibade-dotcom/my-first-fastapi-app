@@ -1,4 +1,3 @@
-
 import os
 
 import secrets
@@ -51,9 +50,26 @@ VTPASS_API_KEY = os.getenv("VTPASS_API_KEY")
 VTPASS_PUBLIC_KEY = os.getenv("VTPASS_PUBLIC_KEY")
 VTPASS_SECRET_KEY = os.getenv("VTPASS_SECRET_KEY")
 
+
+def get_vtpass_headers():
+    if not VTPASS_API_KEY or not VTPASS_SECRET_KEY:
+        raise HTTPException(
+            status_code=503,
+            detail="VTpass sandbox credentials are not configured."
+        )
+
+    return {
+        "api-key": VTPASS_API_KEY,
+        "secret-key": VTPASS_SECRET_KEY,
+        "Content-Type": "application/json"
+    }
+
+
+# =========================
+# DATABASE, JWT AND PAYSTACK CONFIGURATION
+# =========================
+
 DATABASE_URL = os.getenv("DATABASE_URL")
-
-
 
 if not DATABASE_URL:
     raise RuntimeError("DATABASE_URL is not configured")
@@ -409,6 +425,11 @@ class AirtimePurchaseRequest(BaseModel):
     network: Literal["MTN", "Airtel", "Glo", "9mobile"]
     phone: str = Field(pattern=r"^0\d{10}$")
     amount: Decimal = Field(ge=50, le=100000)
+
+class DataPurchaseRequest(BaseModel):
+    network: Literal["MTN", "Airtel", "Glo", "9mobile"]
+    phone: str = Field(pattern=r"^0\d{10}$")
+    variation_code: str = Field(min_length=1, max_length=100)
 
 
 
@@ -1275,6 +1296,474 @@ def get_wallet(
         "balance": float(current_user.wallet_balance)
     }
 
+# =========================
+# APPROVED DATA PLAN CATALOGUE
+# =========================
+
+APPROVED_DATA_PLANS = {
+    "mtn": {
+        "mtn-50mb-200": {
+            "name": "MTN 200MB — 2 days",
+            "selling_price": 230,
+        },
+        "mtn-2-5gb-600": {
+            "name": "MTN 2.5GB — 2 days",
+            "selling_price": 680,
+        },
+        "mtn-3gb-1500": {
+            "name": "MTN 3GB — 30 days",
+            "selling_price": 1600,
+        },
+        "mtn-3gb-2500": {
+            "name": "MTN 6GB — 30 days",
+            "selling_price": 2750,
+        },
+        "mtn-data-3000": {
+            "name": "MTN 8GB — 30 days",
+            "selling_price": 3310,
+        },
+        "mtn-1gb-3500": {
+            "name": "MTN 10GB — 30 days",
+            "selling_price": 3740,
+        },
+        "mtn-100hr-5000": {
+            "name": "MTN 15GB — 30 days",
+            "selling_price": 5250,
+        },
+        "mtn-3gb-6000": {
+            "name": "MTN 20GB — 30 days",
+            "selling_price": 6300,
+        },
+        "mtn-40gb-10000": {
+            "name": "MTN 40GB — 30 days",
+            "selling_price": 10500,
+        },
+    }
+}
+
+# =========================
+# VTPASS DATA PLANS
+# =========================
+
+@app.get("/data/plans/{network}")
+def get_data_plans(network: str):
+    network_services = {
+        "mtn": "mtn-data",
+        "airtel": "airtel-data",
+        "glo": "glo-data",
+        "9mobile": "etisalat-data",
+    }
+
+    network_key = network.strip().lower()
+    service_id = network_services.get(network_key)
+
+    if not service_id:
+        raise HTTPException(
+            status_code=400,
+            detail="Unsupported network. Use mtn, airtel, glo, or 9mobile."
+        )
+
+    if not VTPASS_API_KEY or not VTPASS_PUBLIC_KEY:
+        raise HTTPException(
+            status_code=503,
+            detail="VTpass read-only credentials are not configured."
+        )
+
+    headers = {
+        "api-key": VTPASS_API_KEY,
+        "public-key": VTPASS_PUBLIC_KEY,
+        "Content-Type": "application/json",
+    }
+
+    try:
+        response = requests.get(
+            f"{VTPASS_BASE_URL}/service-variations",
+            params={"serviceID": service_id},
+            headers=headers,
+            timeout=30,
+        )
+        response.raise_for_status()
+        result = response.json()
+
+    except (requests.RequestException, ValueError):
+        raise HTTPException(
+            status_code=502,
+            detail="Unable to retrieve data plans from VTpass."
+        )
+
+    if str(result.get("response_description", "")) != "000":
+        raise HTTPException(
+            status_code=502,
+            detail="VTpass did not return a successful data-plan response."
+        )
+
+    content = result.get("content") or {}
+    variations = content.get("variations") or []
+
+    approved_plans = APPROVED_DATA_PLANS.get(network_key, {})
+
+    plans = []
+
+    for plan in variations:
+        variation_code = str(
+            plan.get("variation_code") or ""
+        ).strip()
+
+        approved = approved_plans.get(variation_code)
+
+        if not approved:
+            continue
+
+        plans.append({
+            "variation_code": variation_code,
+            "name": approved["name"],
+            "amount": approved["selling_price"],
+        })
+
+    return {
+        "network": network_key,
+        "service_name": content.get("ServiceName"),
+        "plans": plans,
+    }
+
+# =========================
+# VTPASS DATA PURCHASE
+# DISABLED UNTIL AUTHENTICATION IS RESOLVED
+# =========================
+
+@app.post("/data/purchase")
+def purchase_data(
+    request: DataPurchaseRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    raise HTTPException(
+        status_code=503,
+        detail=(
+            "Data purchases are temporarily disabled while "
+            "VTpass authentication is being resolved."
+        ),
+    )
+
+@app.post("/airtime/purchase")
+def purchase_airtime(
+    request: AirtimePurchaseRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    if not VTPASS_API_KEY or not VTPASS_SECRET_KEY:
+        raise HTTPException(
+            status_code=503,
+            detail="VTpass sandbox credentials are not configured."
+        )
+
+    amount = Decimal(str(request.amount))
+
+    if amount != amount.quantize(Decimal("0.01")):
+        raise HTTPException(
+            status_code=400,
+            detail="Amount must have no more than two decimal places."
+        )
+
+    # Generate a unique request ID using Nigeria's local time.
+    nigeria_time = datetime.now(
+        timezone(timedelta(hours=1))
+    )
+    reference = (
+        nigeria_time.strftime("%Y%m%d%H%M")
+        + secrets.token_hex(8)
+    )
+
+    # Reserve funds and create the pending transaction atomically.
+    try:
+        user = (
+            db.query(User)
+            .filter(User.id == current_user.id)
+            .with_for_update()
+            .first()
+        )
+
+        if not user:
+            raise HTTPException(
+                status_code=404,
+                detail="Customer account not found."
+            )
+
+        if user.wallet_balance < amount:
+            raise HTTPException(
+                status_code=400,
+                detail="Insufficient wallet balance."
+            )
+
+        transaction = WalletTransaction(
+            user_id=user.id,
+            transaction_type="airtime",
+            amount=amount,
+            status="pending",
+            reference=reference,
+            gateway="vtpass"
+        )
+
+        user.wallet_balance -= amount
+        db.add(transaction)
+        db.commit()
+        db.refresh(transaction)
+
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception:
+        db.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to reserve wallet funds."
+        )
+
+    # Send the airtime purchase to VTpass sandbox.
+    payload = {
+        "request_id": reference,
+        "serviceID": {
+            "MTN": "mtn",
+            "Airtel": "airtel",
+            "Glo": "glo",
+            "9mobile": "etisalat"
+        }[request.network],
+        "billersCode": request.phone,
+        "amount": float(amount),
+        "phone": user.phone
+    }
+
+    try:
+        response = requests.post(
+            f"{VTPASS_BASE_URL}/pay",
+            json=payload,
+            headers=get_vtpass_headers(),
+            timeout=30
+        )
+        result = response.json()
+
+    except (requests.RequestException, ValueError):
+        # The request may have reached VTpass.
+        # Keep funds reserved until the outcome is checked.
+        return {
+            "message": (
+                "Purchase outcome is uncertain. "
+                "Do not retry this purchase yet."
+            ),
+            "status": "pending",
+            "reference": reference,
+            "amount": float(amount)
+        }
+
+    response_code = str(result.get("code", ""))
+    content = result.get("content") or {}
+    details = content.get("transactions") or {}
+    vtpass_status = str(details.get("status", "")).lower()
+
+    # Only accept an explicit delivery confirmation.
+    if response_code == "000" and vtpass_status == "delivered":
+        try:
+            transaction.status = "success"
+            db.commit()
+            db.refresh(user)
+
+            return {
+                "message": "Airtime purchase successful.",
+                "status": "success",
+                "reference": reference,
+                "network": request.network,
+                "phone": request.phone,
+                "amount": float(amount),
+                "wallet_balance": float(user.wallet_balance)
+            }
+
+        except Exception:
+            db.rollback()
+            # Do not refund automatically: VTpass may have delivered.
+            return {
+                "message": (
+                    "VTpass reported delivery, but the local "
+                    "record needs reconciliation."
+                ),
+                "status": "pending",
+                "reference": reference,
+                "amount": float(amount)
+            }
+
+    # Refund only when VTpass explicitly reports failure.
+    if vtpass_status in ("failed", "failure"):
+        try:
+            user = (
+                db.query(User)
+                .filter(User.id == current_user.id)
+                .with_for_update()
+                .first()
+            )
+
+            transaction = (
+                db.query(WalletTransaction)
+                .filter(
+                    WalletTransaction.reference == reference,
+                    WalletTransaction.user_id == current_user.id
+                )
+                .with_for_update()
+                .first()
+            )
+
+            if not user or not transaction:
+                db.rollback()
+                return {
+                    "message": "Purchase requires reconciliation.",
+                    "status": "pending",
+                    "reference": reference
+                }
+
+            if transaction.status == "pending":
+                user.wallet_balance += transaction.amount
+                transaction.status = "failed"
+                db.commit()
+
+            return {
+                "message": "Airtime purchase failed; funds refunded.",
+                "status": "failed",
+                "reference": reference,
+                "wallet_balance": float(user.wallet_balance)
+            }
+
+        except Exception:
+            db.rollback()
+            return {
+                "message": "Refund requires reconciliation.",
+                "status": "pending",
+                "reference": reference
+            }
+
+    # Processing, unfamiliar responses, and other uncertain outcomes
+    # must not be marked successful or automatically refunded.
+    return {
+        "message": (
+            "VTpass has not confirmed delivery or failure. "
+            "Do not retry this purchase yet."
+        ),
+        "status": "pending",
+        "reference": reference,
+        "amount": float(amount),
+        "vtpass_response": result
+    }
+
+
+@app.post("/airtime/verify/{reference}")
+def verify_airtime_purchase(
+    reference: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    transaction = (
+        db.query(WalletTransaction)
+        .filter(
+            WalletTransaction.reference == reference,
+            WalletTransaction.user_id == current_user.id,
+            WalletTransaction.transaction_type == "airtime",
+            WalletTransaction.gateway == "vtpass"
+        )
+        .first()
+    )
+
+    if not transaction:
+        raise HTTPException(
+            status_code=404,
+            detail="Airtime transaction not found."
+        )
+
+    if transaction.status in ("success", "failed"):
+        return {
+            "reference": reference,
+            "status": transaction.status,
+            "amount": float(transaction.amount)
+        }
+
+    try:
+        response = requests.post(
+            f"{VTPASS_BASE_URL}/requery",
+            json={"request_id": reference},
+            headers=get_vtpass_headers(),
+            timeout=30
+        )
+        result = response.json()
+
+    except (requests.RequestException, ValueError):
+        raise HTTPException(
+            status_code=502,
+            detail="Unable to check the VTpass transaction. Try again later."
+        )
+
+    code = str(result.get("code", ""))
+    content = result.get("content") or {}
+    details = content.get("transactions") or {}
+    status = str(details.get("status", "")).lower()
+
+    if code == "000" and status == "delivered":
+        transaction = (
+            db.query(WalletTransaction)
+            .filter(
+                WalletTransaction.reference == reference,
+                WalletTransaction.user_id == current_user.id
+            )
+            .with_for_update()
+            .first()
+        )
+
+        if transaction and transaction.status == "pending":
+            transaction.status = "success"
+            db.commit()
+
+        return {
+            "reference": reference,
+            "status": "success",
+            "amount": float(transaction.amount)
+        }
+
+    if status in ("failed", "failure"):
+        user = (
+            db.query(User)
+            .filter(User.id == current_user.id)
+            .with_for_update()
+            .first()
+        )
+
+        transaction = (
+            db.query(WalletTransaction)
+            .filter(
+                WalletTransaction.reference == reference,
+                WalletTransaction.user_id == current_user.id
+            )
+            .with_for_update()
+            .first()
+        )
+
+        if user and transaction and transaction.status == "pending":
+            user.wallet_balance += transaction.amount
+            transaction.status = "failed"
+            db.commit()
+
+            return {
+                "reference": reference,
+                "status": "failed",
+                "message": "Purchase failed; funds refunded.",
+                "wallet_balance": float(user.wallet_balance)
+            }
+
+    return {
+    "reference": reference,
+    "status": "pending",
+    "message": (
+        "VTpass has not confirmed a final result. "
+        "Do not submit another purchase."
+    ),
+    "vtpass_code": code,
+    "vtpass_description": result.get("response_description"),
+    "vtpass_status": status or None
+}
 
 @app.post("/wallet/fund")
 def fund_wallet(
@@ -1951,7 +2440,7 @@ def initialize_paystack_payment(
             detail="An unexpected error occurred while initializing payment."
         )
 
-   
+
 @app.get("/payment-success")
 def payment_success(reference: str):
     return FileResponse("payment-success.html")
