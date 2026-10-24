@@ -319,7 +319,7 @@
 
 <body>
 
-    
+
 <div class="login-container" id="loginContainer">
 
     <div class="logo">
@@ -476,7 +476,7 @@
     <label for="signupPhone">Phone Number</label>
     <input type="text" id="signupPhone" placeholder="Enter your phone number">
 
-    
+
 <label for="signupEmail">Email Address</label>
 <input
     type="email"
@@ -486,7 +486,7 @@
 >
 
 
-    
+
 <label for="signupPassword">Password</label>
 <div class="password-field">
     <input
@@ -684,25 +684,25 @@
     <h2>Buy Data</h2>
 
     <label for="dataNetwork">Select Network</label>
-    <select id="dataNetwork">
-        <option value="">Choose network</option>
-        <option value="MTN">MTN</option>
-        <option value="Airtel">Airtel</option>
-        <option value="Glo">Glo</option>
-        <option value="9mobile">9mobile</option>
-    </select>
+
+<select id="dataNetwork" onchange="loadDataPlans()">
+    <option value="">Choose network</option>
+    <option value="MTN">MTN</option>
+    <option value="Airtel">Airtel</option>
+    <option value="Glo">Glo</option>
+    <option value="9mobile">9mobile</option>
+</select>
+
 
     <label for="dataPhone">Phone Number</label>
     <input type="tel" id="dataPhone" placeholder="Enter phone number">
 
-    <label for="dataPlan">Select Data Plan</label>
-    <select id="dataPlan">
-        <option value="">Choose a data plan</option>
-        <option value="500MB">500 MB</option>
-        <option value="1GB">1 GB</option>
-        <option value="2GB">2 GB</option>
-        <option value="5GB">5 GB</option>
-    </select>
+
+<label for="dataPlan">Select Data Plan</label>
+<select id="dataPlan">
+    <option value="">Select a network first</option>
+</select>
+
 
     <p id="dataMessage"></p>
 
@@ -922,11 +922,11 @@ function showOnlyScreen(screenId) {
     }
 }
 
-    
+
         // =========================
         // SHOW LOGIN
         // =========================
-        
+
         function showLogin() {
     showOnlyScreen("loginCard");
 }
@@ -1092,11 +1092,12 @@ function showDashboardFromAirtime() {
 }
 
 
-function buyAirtime() {
+async function buyAirtime() {
     const network = document.getElementById("airtimeNetwork").value;
     const phone = document.getElementById("airtimePhone").value.trim();
     const amount = Number(document.getElementById("airtimeAmount").value);
     const message = document.getElementById("airtimeMessage");
+    const token = localStorage.getItem("access_token");
 
     message.textContent = "";
 
@@ -1105,53 +1106,115 @@ function buyAirtime() {
         return;
     }
 
+    if (!/^0\d{10}$/.test(phone)) {
+        message.textContent =
+            "Enter a valid 11-digit Nigerian phone number.";
+        return;
+    }
 
-if (!/^0\d{10}$/.test(phone)) {
-    message.textContent = "Enter a valid 11-digit Nigerian phone number.";
-    return;
-}
+    const networkPrefixes = {
+        MTN: [
+            "0703", "0704", "0706", "0803", "0806",
+            "0810", "0813", "0814", "0816",
+            "0903", "0906", "0913", "0916",
+            "07025", "07026"
+        ],
+        Airtel: [
+            "0701", "0708", "0802", "0808", "0812",
+            "0901", "0902", "0904", "0907", "0912"
+        ],
+        Glo: [
+            "0705", "0805", "0807", "0811", "0815",
+            "0905", "0915"
+        ],
+        "9mobile": [
+            "0809", "0817", "0818", "0908", "0909"
+        ]
+    };
 
+    const matchesNetwork = networkPrefixes[network]?.some(
+        prefix => phone.startsWith(prefix)
+    );
 
-
-const networkPrefixes = {
-    MTN: [
-        "0703", "0704", "0706", "0803", "0806",
-        "0810", "0813", "0814", "0816",
-        "0903", "0906", "0913", "0916",
-        "07025", "07026"
-    ],
-    Airtel: [
-        "0701", "0708", "0802", "0808", "0812",
-        "0901", "0902", "0904", "0907", "0912"
-    ],
-    Glo: [
-        "0705", "0805", "0807", "0811", "0815",
-        "0905", "0915"
-    ],
-    "9mobile": [
-        "0809", "0817", "0818", "0908", "0909"
-    ]
-};
-
-const matchesNetwork = networkPrefixes[network]?.some(prefix =>
-    phone.startsWith(prefix)
-);
-
-if (!matchesNetwork) {
-    message.textContent =
-        "This number's prefix does not match " + network +
-        ". Please check the number or select the correct network.";
-    return;
-}
-
+    if (!matchesNetwork) {
+        message.textContent =
+            "This number's prefix does not match " + network +
+            ". Please check the number or select the correct network.";
+        return;
+    }
 
     if (!Number.isFinite(amount) || amount < 50) {
         message.textContent = "The minimum airtime amount is ₦50.";
         return;
     }
 
-    message.textContent =
-        "Details validated. Secure purchase processing is not connected yet.";
+    if (!token) {
+        message.textContent = "Please log in again before purchasing.";
+        return;
+    }
+
+    if (!Number.isFinite(amount) || amount > 1000000) {
+        message.textContent = "Please enter a valid airtime amount.";
+        return;
+    }
+
+    if (!confirm(
+        "Confirm airtime purchase:\n\n" +
+        "Network: " + network + "\n" +
+        "Phone: " + phone + "\n" +
+        "Amount: ₦" + amount.toLocaleString("en-NG") +
+        "\n\nContinue?"
+    )) {
+        return;
+    }
+
+    message.textContent = "Processing purchase. Please wait...";
+
+    try {
+        const response = await fetch("/airtime/purchase", {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                "Authorization": `Bearer ${token}`
+            },
+            body: JSON.stringify({
+                network: network,
+                phone: phone,
+                amount: amount
+            })
+        });
+
+        const data = await response.json();
+
+        if (response.ok) {
+            message.textContent =
+                (data.message || "Purchase request processed.") +
+                (data.reference ? " Reference: " + data.reference : "") +
+                (data.wallet_balance !== undefined
+                    ? " Wallet balance: ₦" +
+                      Number(data.wallet_balance).toLocaleString("en-NG", {
+                          minimumFractionDigits: 2,
+                          maximumFractionDigits: 2
+                      })
+                    : "");
+
+            if (data.status === "success" || data.status === "failed") {
+                if (typeof loadWallet === "function") {
+                    await loadWallet();
+                }
+            }
+        } else {
+            message.textContent =
+                typeof data.detail === "string"
+                    ? data.detail
+                    : "Purchase request failed. Please check your account and try again.";
+        }
+
+    } catch (error) {
+        message.textContent =
+            "Unable to confirm the purchase response. Check transaction history before trying again.";
+        console.error("Airtime purchase error:", error);
+    }
 }
 
 
@@ -1271,6 +1334,98 @@ function detectDataNetwork() {
     message.textContent =
         "Network not recognised. Please select your network manually.";
 }
+
+
+async function loadDataPlans() {
+    const network = document.getElementById("dataNetwork").value;
+    const planSelect = document.getElementById("dataPlan");
+    const message = document.getElementById("dataMessage");
+
+    planSelect.innerHTML = '<option value="">Loading data plans...</option>';
+    message.textContent = "";
+
+    if (!network) {
+        planSelect.innerHTML = '<option value="">Select a network first</option>';
+        return;
+    }
+
+    const networkKey = network.toLowerCase();
+
+    try {
+        const response = await fetch(
+            `/data/plans/${encodeURIComponent(networkKey)}`
+        );
+
+        const result = await response.json();
+
+        if (!response.ok) {
+            throw new Error(
+                result.detail || "Unable to load data plans."
+            );
+        }
+
+        planSelect.innerHTML =
+            '<option value="">Choose a data plan</option>';
+
+        if (!result.plans || result.plans.length === 0) {
+            planSelect.innerHTML =
+                '<option value="">No plans available</option>';
+            message.textContent = "No data plans were returned.";
+            return;
+        }
+
+        const approvedMtnPlans = [
+    "mtn-50mb-200",
+    "mtn-2-5gb-600",
+    "mtn-3gb-1500",
+    "mtn-3gb-2500",
+    "mtn-data-3000",
+    "mtn-1gb-3500",
+    "mtn-100hr-5000",
+    "mtn-3gb-6000",
+    "mtn-40gb-10000"
+];
+
+const isMtn = networkKey === "mtn";
+
+const plansToShow = isMtn
+    ? result.plans.filter(plan =>
+        approvedMtnPlans.includes(
+            String(plan.variation_code).toLowerCase()
+        )
+    )
+    : result.plans;
+
+plansToShow.forEach(plan => {
+    if (!plan.variation_code || plan.amount == null) {
+        return;
+    }
+
+    const option = document.createElement("option");
+    option.value = plan.variation_code;
+    option.textContent =
+        `${plan.name} — ₦${Number(plan.amount).toLocaleString("en-NG")}`;
+
+    planSelect.appendChild(option);
+});
+
+        if (planSelect.options.length === 1) {
+            planSelect.innerHTML =
+                '<option value="">No usable plans available</option>';
+            message.textContent =
+                "The provider returned no usable data plans.";
+        }
+
+    } catch (error) {
+        planSelect.innerHTML =
+            '<option value="">Could not load plans</option>';
+
+        message.textContent =
+            error.message || "Unable to load data plans. Please try again.";
+    }
+}
+
+
 function buyData() {
     const network = document.getElementById("dataNetwork").value;
     const phone = document.getElementById("dataPhone").value.trim();
@@ -1364,7 +1519,7 @@ async function signup() {
     const email = document.getElementById("signupEmail").value.trim();
     const password = document.getElementById("signupPassword").value;
     const result = document.getElementById("signupResult");
-    
+
 const confirmPassword = document.getElementById("signupConfirmPassword").value;
 
 if (password !== confirmPassword) {
