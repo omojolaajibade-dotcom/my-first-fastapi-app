@@ -405,6 +405,12 @@
                 Users
             </button>
 
+            
+            <button class="nav-button" data-section="wallet">
+                Admin Wallet
+            </button>
+
+
             <button class="nav-button" data-section="transactions">
                 Transactions
             </button>
@@ -556,6 +562,48 @@
                     </div>
                 </div>
             </section>
+
+
+<section class="section" id="wallet">
+    <div class="panel">
+        <div class="panel-header">
+            <h2>Admin Wallet</h2>
+            <button class="button" id="refreshAdminWallet">
+                Refresh Balance
+            </button>
+        </div>
+
+        <p class="muted">
+            Manage your administrator wallet balance.
+        </p>
+
+        <div class="stat-card">
+            <div class="stat-label">Available Balance</div>
+            <div class="stat-value" id="adminWalletBalance">
+                Loading...
+            </div>
+        </div>
+
+        <div class="form-group">
+            <label for="adminFundAmount">Funding Amount (₦)</label>
+            <input
+                class="search"
+                type="number"
+                id="adminFundAmount"
+                min="100"
+                step="0.01"
+                placeholder="Enter amount to fund"
+            >
+        </div>
+
+        <button class="button" id="fundAdminWalletButton">
+            Fund Wallet with Paystack
+        </button>
+
+        <p class="muted" id="adminWalletMessage" role="status"></p>
+    </div>
+</section>
+
 
 
 <section class="section" id="audit-logs">
@@ -919,16 +967,26 @@ async function loadAuditLogs() {
 
 
 
+async function loadAdminWallet() {
+    const data = await api("/admin/wallet");
+
+    document.getElementById("adminWalletBalance").textContent =
+        formatMoney(data.balance ?? 0);
+}
+
         async function loadDashboard() {
             clearNotice();
 
-            const results = await Promise.allSettled([
-            loadOverview(),
-            loadUsers(),
-            loadTransactions(),
-            loadProfile(),
-            loadAuditLogs()
-    ]);
+            
+const results = await Promise.allSettled([
+    loadOverview(),
+    loadUsers(),
+    loadTransactions(),
+    loadProfile(),
+    loadAuditLogs(),
+    loadAdminWallet()
+]);
+
 
             const failed = results.filter(result => result.status === "rejected");
 
@@ -954,13 +1012,14 @@ async function loadAuditLogs() {
 
 
 
-                const titles = {
-                            overview: "Dashboard Overview",
-                            users: "User Management",
-                            transactions: "Transactions",
-                            "audit-logs": "Audit Logs",
-                            profile: "Admin Profile"
-        };
+               const titles = {
+    overview: "Dashboard Overview",
+    users: "User Management",
+    wallet: "Admin Wallet",
+    transactions: "Transactions",
+    "audit-logs": "Audit Logs",
+    profile: "Admin Profile"
+};
 
                 document.getElementById("pageTitle").textContent =
                     titles[sectionId] || "Dashboard";
@@ -979,25 +1038,34 @@ async function loadAuditLogs() {
             "input", renderTransactionSearch
         );
 
-        document.getElementById("refreshUsers").addEventListener("click", async () => {
-            try {
-                clearNotice();
-                await loadUsers();
-            } catch (error) {
-                showNotice(error.message);
-            }
-        });
+       document.getElementById("refreshUsers").addEventListener(
+    "click",
+    async () => {
+        try {
+            clearNotice();
+            await loadUsers();
+            showNotice("Users refreshed successfully.");
+        } catch (error) {
+            showNotice(error.message);
+        }
+    }
+);
 
-        document.getElementById("refreshTransactions").addEventListener(
-            "click", async () => {
-                try {
-                    clearNotice();
-                    await loadTransactions();
-                } catch (error) {
-                    showNotice(error.message);
-                }
-            }
-        );
+
+document.getElementById("refreshTransactions").addEventListener(
+    "click",
+    async () => {
+        try {
+            clearNotice();
+            await loadTransactions();
+            showNotice("Transactions refreshed successfully.");
+        } catch (error) {
+            showNotice(error.message);
+        }
+    }
+);
+      
+
 
 
 document.getElementById("refreshAuditLogs").addEventListener(
@@ -1006,8 +1074,81 @@ document.getElementById("refreshAuditLogs").addEventListener(
         try {
             clearNotice();
             await loadAuditLogs();
+            showNotice("Audit logs refreshed successfully.");
         } catch (error) {
             showNotice(error.message);
+        }
+    }
+);
+
+
+document.getElementById("refreshAdminWallet").addEventListener(
+    "click",
+    async () => {
+        try {
+            clearNotice();
+            await loadAdminWallet();
+            showNotice("Admin wallet balance refreshed.");
+        } catch (error) {
+            showNotice(error.message);
+        }
+    }
+);
+
+
+
+document.getElementById("fundAdminWalletButton").addEventListener(
+    "click",
+    async () => {
+        const amountInput = document.getElementById("adminFundAmount");
+        const message = document.getElementById("adminWalletMessage");
+        const button = document.getElementById("fundAdminWalletButton");
+        const amount = Number(amountInput.value);
+
+        message.textContent = "";
+
+        if (!Number.isFinite(amount) || amount <= 0 || amount > 1000000) {
+            message.textContent =
+                "Enter an amount greater than ₦0 and no more than ₦1,000,000.";
+            return;
+        }
+
+        if (Math.round(amount * 100) !== amount * 100) {
+            message.textContent =
+                "Enter an amount with no more than two decimal places.";
+            return;
+        }
+
+        button.disabled = true;
+        button.textContent = "Initializing payment...";
+
+        try {
+            const data = await api("/admin/wallet/fund", {
+                method: "POST",
+                body: JSON.stringify({ amount: amount })
+            });
+
+            if (!data.authorization_url) {
+                throw new Error("Paystack did not return a payment URL.");
+            }
+
+            const paymentUrl = new URL(data.authorization_url);
+
+            if (
+                paymentUrl.protocol !== "https:" ||
+                paymentUrl.hostname !== "checkout.paystack.com"
+            ) {
+                throw new Error("The payment URL is invalid.");
+            }
+
+            message.textContent = "Redirecting to Paystack...";
+            window.location.assign(paymentUrl.href);
+        } catch (error) {
+            message.textContent = error.message ||
+                "Unable to initialize payment. Check your transaction history before retrying.";
+        } finally {
+            button.disabled = false;
+            button.textContent = "Fund Wallet with Paystack";
         }
     }
 );

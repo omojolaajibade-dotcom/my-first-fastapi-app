@@ -10,6 +10,8 @@ import json
 
 import requests
 
+import pytz
+
 from decimal import Decimal
 
 from datetime import datetime, timedelta, timezone
@@ -1445,6 +1447,13 @@ def purchase_data(
         ),
     )
 
+
+def generate_vtpass_request_id() -> str:
+    nigeria_timezone = pytz.timezone("Africa/Lagos")
+    timestamp = datetime.now(nigeria_timezone).strftime("%Y%m%d%H%M")
+    return timestamp + secrets.token_hex(4)
+
+
 @app.post("/airtime/purchase")
 def purchase_airtime(
     request: AirtimePurchaseRequest,
@@ -1465,14 +1474,8 @@ def purchase_airtime(
             detail="Amount must have no more than two decimal places."
         )
 
-    # Generate a unique request ID using Nigeria's local time.
-    nigeria_time = datetime.now(
-        timezone(timedelta(hours=1))
-    )
-    reference = (
-        nigeria_time.strftime("%Y%m%d%H%M")
-        + secrets.token_hex(8)
-    )
+    # Generate the VTpass request ID using Nigeria's local time.
+    reference = generate_vtpass_request_id()
 
     # Reserve funds and create the pending transaction atomically.
     try:
@@ -1520,18 +1523,19 @@ def purchase_airtime(
         )
 
     # Send the airtime purchase to VTpass sandbox.
+    
     payload = {
-        "request_id": reference,
-        "serviceID": {
-            "MTN": "mtn",
-            "Airtel": "airtel",
-            "Glo": "glo",
-            "9mobile": "etisalat"
-        }[request.network],
-        "billersCode": request.phone,
-        "amount": float(amount),
-        "phone": user.phone
-    }
+    "request_id": reference,
+    "serviceID": {
+        "MTN": "mtn",
+        "Airtel": "airtel",
+        "Glo": "glo",
+        "9mobile": "etisalat"
+    }[request.network],
+    "amount": float(amount),
+    "phone": request.phone
+}
+
 
     try:
         response = requests.post(
@@ -1666,6 +1670,7 @@ def verify_airtime_purchase(
             WalletTransaction.transaction_type == "airtime",
             WalletTransaction.gateway == "vtpass"
         )
+        .with_for_update()
         .first()
     )
 
@@ -1689,12 +1694,16 @@ def verify_airtime_purchase(
             headers=get_vtpass_headers(),
             timeout=30
         )
+        response.raise_for_status()
         result = response.json()
 
     except (requests.RequestException, ValueError):
         raise HTTPException(
             status_code=502,
-            detail="Unable to check the VTpass transaction. Try again later."
+            detail=(
+                "Unable to confirm the VTpass transaction. "
+                "Your transaction remains pending; do not retry the purchase."
+            )
         )
 
     code = str(result.get("code", ""))
@@ -1702,20 +1711,10 @@ def verify_airtime_purchase(
     details = content.get("transactions") or {}
     status = str(details.get("status", "")).lower()
 
+    # Confirmed delivery
     if code == "000" and status == "delivered":
-        transaction = (
-            db.query(WalletTransaction)
-            .filter(
-                WalletTransaction.reference == reference,
-                WalletTransaction.user_id == current_user.id
-            )
-            .with_for_update()
-            .first()
-        )
-
-        if transaction and transaction.status == "pending":
-            transaction.status = "success"
-            db.commit()
+        transaction.status = "success"
+        db.commit()
 
         return {
             "reference": reference,
@@ -1723,7 +1722,13 @@ def verify_airtime_purchase(
             "amount": float(transaction.amount)
         }
 
-    if status in ("failed", "failure"):
+    # Refund only for documented terminal outcomes.
+    definitive_failure = (
+        code in ("016", "091")
+        or (code == "040" and status == "reversed")
+    )
+
+    if definitive_failure:
         user = (
             db.query(User)
             .filter(User.id == current_user.id)
@@ -1731,17 +1736,15 @@ def verify_airtime_purchase(
             .first()
         )
 
-        transaction = (
-            db.query(WalletTransaction)
-            .filter(
-                WalletTransaction.reference == reference,
-                WalletTransaction.user_id == current_user.id
+        if not user:
+            db.rollback()
+            raise HTTPException(
+                status_code=404,
+                detail="Customer account not found."
             )
-            .with_for_update()
-            .first()
-        )
 
-        if user and transaction and transaction.status == "pending":
+        # The transaction row is locked; refund only once.
+        if transaction.status == "pending":
             user.wallet_balance += transaction.amount
             transaction.status = "failed"
             db.commit()
@@ -1753,17 +1756,29 @@ def verify_airtime_purchase(
                 "wallet_balance": float(user.wallet_balance)
             }
 
+        db.rollback()
+
+        return {
+            "reference": reference,
+            "status": transaction.status,
+            "message": "Transaction status was already updated."
+        }
+
+    # Unclear or non-final response: never refund automatically.
+    db.rollback()
+
     return {
-    "reference": reference,
-    "status": "pending",
-    "message": (
-        "VTpass has not confirmed a final result. "
-        "Do not submit another purchase."
-    ),
-    "vtpass_code": code,
-    "vtpass_description": result.get("response_description"),
-    "vtpass_status": status or None
-}
+        "reference": reference,
+        "status": "pending",
+        "message": (
+            "VTpass has not confirmed a final result. "
+            "Do not submit another purchase."
+        ),
+        "vtpass_code": code,
+        "vtpass_description": result.get("response_description"),
+        "vtpass_status": status or None
+    }
+
 
 @app.post("/wallet/fund")
 def fund_wallet(

@@ -1,4 +1,3 @@
-```html
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -69,7 +68,7 @@
 </head>
 <body>
     <main class="card">
-        <div class="icon">⏳</div>
+        <div class="icon">...</div>
         <h1>Payment Status</h1>
         <p id="message">
             Your payment has been submitted for verification.
@@ -81,44 +80,71 @@
         </button>
     </main>
 
-html
 <script>
     const params = new URLSearchParams(window.location.search);
     const reference = params.get("reference") || params.get("trxref");
+    const isAdminFlow = params.get("flow") === "admin";
 
     const statusElement = document.getElementById("status");
     const messageElement = document.getElementById("message");
     const iconElement = document.querySelector(".icon");
+    const referenceElement = document.getElementById("reference");
+    const returnButton = document.querySelector("button");
+
+    if (isAdminFlow) {
+        returnButton.textContent = "Return to Admin Dashboard";
+        returnButton.onclick = () => {
+            window.location.href = "/admin-dashboard.html";
+        };
+    }
 
     if (!reference) {
         statusElement.textContent = "Payment reference not found.";
         messageElement.textContent =
-            "Return to Omotech and check your transaction history.";
+            "Return to your dashboard and check your transaction history.";
     } else {
-        document.getElementById("reference").textContent =
-            "Reference: " + reference;
+        referenceElement.textContent = "Reference: " + reference;
 
         async function verifyPayment() {
-            const token = localStorage.getItem("access_token");
+            const token = isAdminFlow
+                ? sessionStorage.getItem("omotech_admin_token")
+                : localStorage.getItem("access_token");
 
             if (!token) {
                 statusElement.textContent = "Login required";
-                messageElement.textContent =
-                    "Please return to Omotech and log in to check your payment.";
+                messageElement.textContent = isAdminFlow
+                    ? "Please return to the admin dashboard and log in."
+                    : "Please return to Omotech and log in to check your payment.";
                 return;
             }
 
+            const endpoint = isAdminFlow
+                ? "/admin/wallet/verify/"
+                : "/paystack/verify/";
+
+            statusElement.textContent = "Verifying payment...";
+            messageElement.textContent =
+                "Please wait while we confirm your payment.";
+
             try {
                 const response = await fetch(
-                    "/paystack/verify/" + encodeURIComponent(reference),
+                    endpoint + encodeURIComponent(reference),
                     {
+                        method: isAdminFlow ? "POST" : "GET",
                         headers: {
                             "Authorization": "Bearer " + token
                         }
                     }
                 );
 
-                const data = await response.json();
+                const data = await response.json().catch(() => ({}));
+
+                if (response.status === 401 || response.status === 403) {
+                    statusElement.textContent = "Login required";
+                    messageElement.textContent =
+                        "Your session may have expired. Log in and check your transaction history.";
+                    return;
+                }
 
                 if (!response.ok) {
                     statusElement.textContent = "Unable to verify payment";
@@ -128,21 +154,23 @@ html
                 }
 
                 if (data.status === "success") {
-                    iconElement.textContent = "✅";
+                    iconElement.textContent = "✓";
                     statusElement.textContent = "Payment confirmed";
-                    messageElement.textContent =
-                        "Your payment has been verified. Check your wallet balance.";
+                    messageElement.textContent = isAdminFlow
+                        ? "Your admin wallet has been credited. You can return to the admin dashboard."
+                        : "Your payment has been verified. Check your wallet balance.";
                 } else {
                     statusElement.textContent =
                         data.status || "Processing";
                     messageElement.textContent =
-                        data.message || "Your payment is not yet confirmed.";
+                        data.message ||
+                        "Your payment is not yet confirmed. Check your transaction history.";
                 }
             } catch (error) {
                 statusElement.textContent = "Verification unavailable";
                 messageElement.textContent =
-                    "Please check your transaction history and try again.";
-                console.error(error);
+                    "Check your transaction history before trying again.";
+                console.error("Payment verification error:", error);
             }
         }
 
