@@ -1335,25 +1335,26 @@ function detectDataNetwork() {
         "Network not recognised. Please select your network manually.";
 }
 
-
 async function loadDataPlans() {
     const network = document.getElementById("dataNetwork").value;
     const planSelect = document.getElementById("dataPlan");
     const message = document.getElementById("dataMessage");
 
-    planSelect.innerHTML = '<option value="">Loading data plans...</option>';
+    planSelect.innerHTML =
+        '<option value="">Loading data plans...</option>';
     message.textContent = "";
 
     if (!network) {
-        planSelect.innerHTML = '<option value="">Select a network first</option>';
+        planSelect.innerHTML =
+            '<option value="">Select a network first</option>';
         return;
     }
 
-    const networkKey = network.toLowerCase();
+    const networkKey = network.trim().toLowerCase();
 
     try {
         const response = await fetch(
-            `/data/plans/${encodeURIComponent(networkKey)}`
+            `/api/plans/${encodeURIComponent(networkKey)}`
         );
 
         const result = await response.json();
@@ -1367,53 +1368,37 @@ async function loadDataPlans() {
         planSelect.innerHTML =
             '<option value="">Choose a data plan</option>';
 
-        if (!result.plans || result.plans.length === 0) {
+        if (!Array.isArray(result.plans) || result.plans.length === 0) {
             planSelect.innerHTML =
                 '<option value="">No plans available</option>';
             message.textContent = "No data plans were returned.";
             return;
         }
 
-        const approvedMtnPlans = [
-    "mtn-50mb-200",
-    "mtn-2-5gb-600",
-    "mtn-3gb-1500",
-    "mtn-3gb-2500",
-    "mtn-data-3000",
-    "mtn-1gb-3500",
-    "mtn-100hr-5000",
-    "mtn-3gb-6000",
-    "mtn-40gb-10000"
-];
+        result.plans.forEach(plan => {
+            if (
+                !Number.isInteger(Number(plan.plan_id)) ||
+                !plan.name ||
+                !Number.isFinite(Number(plan.price)) ||
+                Number(plan.price) <= 0
+            ) {
+                return;
+            }
 
-const isMtn = networkKey === "mtn";
+            const option = document.createElement("option");
 
-const plansToShow = isMtn
-    ? result.plans.filter(plan =>
-        approvedMtnPlans.includes(
-            String(plan.variation_code).toLowerCase()
-        )
-    )
-    : result.plans;
+            option.value = String(plan.plan_id);
+            option.textContent =
+                `${plan.name} — ₦${Number(plan.price).toLocaleString("en-NG")}`;
 
-plansToShow.forEach(plan => {
-    if (!plan.variation_code || plan.amount == null) {
-        return;
-    }
-
-    const option = document.createElement("option");
-    option.value = plan.variation_code;
-    option.textContent =
-        `${plan.name} — ₦${Number(plan.amount).toLocaleString("en-NG")}`;
-
-    planSelect.appendChild(option);
-});
+            planSelect.appendChild(option);
+        });
 
         if (planSelect.options.length === 1) {
             planSelect.innerHTML =
                 '<option value="">No usable plans available</option>';
             message.textContent =
-                "The provider returned no usable data plans.";
+                "No valid plans are configured for this network.";
         }
 
     } catch (error) {
@@ -1421,10 +1406,12 @@ plansToShow.forEach(plan => {
             '<option value="">Could not load plans</option>';
 
         message.textContent =
-            error.message || "Unable to load data plans. Please try again.";
+            error.message ||
+            "Unable to load data plans. Please try again.";
+
+        console.error("Ridamsub plan loading error:", error);
     }
 }
-
 
 function buyData() {
     const network = document.getElementById("dataNetwork").value;

@@ -10,15 +10,21 @@ import json
 
 import requests
 
-import pytz
-
 from decimal import Decimal
 
 from datetime import datetime, timedelta, timezone
 
 import jwt
 
+import uuid
+
+import httpx
+
 from dotenv import load_dotenv
+
+from fastapi import HTTPException
+
+from config import RIDAMSUB_NETWORKS, RIDAMSUB_DATA_PLANS
 
 from fastapi import Depends, FastAPI, HTTPException, Request, Query
 
@@ -44,30 +50,6 @@ load_dotenv()
 
 
 # =========================
-# VTPASS SANDBOX CONFIGURATION
-# =========================
-
-VTPASS_BASE_URL = "https://sandbox.vtpass.com/api"
-VTPASS_API_KEY = os.getenv("VTPASS_API_KEY")
-VTPASS_PUBLIC_KEY = os.getenv("VTPASS_PUBLIC_KEY")
-VTPASS_SECRET_KEY = os.getenv("VTPASS_SECRET_KEY")
-
-
-def get_vtpass_headers():
-    if not VTPASS_API_KEY or not VTPASS_SECRET_KEY:
-        raise HTTPException(
-            status_code=503,
-            detail="VTpass sandbox credentials are not configured."
-        )
-
-    return {
-        "api-key": VTPASS_API_KEY,
-        "secret-key": VTPASS_SECRET_KEY,
-        "Content-Type": "application/json"
-    }
-
-
-# =========================
 # DATABASE, JWT AND PAYSTACK CONFIGURATION
 # =========================
 
@@ -78,6 +60,8 @@ if not DATABASE_URL:
 
 JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY")
 PAYSTACK_SECRET_KEY = os.getenv("PAYSTACK_SECRET_KEY")
+RIDAMSUB_API_KEY = os.getenv("RIDAMSUB_API_KEY")
+RIDAMSUB_BASE_URL = "https://ridamsub.com"
 PAYSTACK_BASE_URL = "https://api.paystack.co"
 
 if not JWT_SECRET_KEY:
@@ -344,6 +328,312 @@ app = FastAPI(
     version="1.0.0"
 )
 
+
+@app.get("/api/plans/{network}")
+def get_ridamsub_data_plans(network: str):
+    network_key = network.strip().lower()
+
+    if network_key not in RIDAMSUB_NETWORKS:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                "Unsupported network. "
+                "Available networks: mtn, airtel, glo, 9mobile."
+            ),
+        )
+
+    configured_plans = RIDAMSUB_DATA_PLANS.get(network_key, [])
+
+    customer_plans = [
+        {
+            "plan_id": plan["plan_id"],
+            "name": plan["name"],
+            "price": plan["selling_price"],
+        }
+        for plan in configured_plans
+        if (
+            plan.get("available") is True
+            and isinstance(plan.get("plan_id"), int)
+            and isinstance(plan.get("selling_price"), (int, float))
+            and not isinstance(plan.get("selling_price"), bool)
+            and plan["selling_price"] > 0
+            and isinstance(plan.get("provider_cost"), (int, float))
+            and not isinstance(plan.get("provider_cost"), bool)
+            and plan["provider_cost"] > 0
+            and plan["selling_price"] >= plan["provider_cost"]
+        )
+    ]
+
+    return {
+        "network": network_key,
+        "network_id": RIDAMSUB_NETWORKS[network_key],
+        "plans": customer_plans,
+    }
+
+def execute_ridamsub_purchase(
+    db: Session,
+    user_id: int,
+    network: str,
+    phone: str,
+    local_amount: Decimal,
+    plan_id: int | None = None,
+    amount: Decimal | None = None,
+    airtime_type: str = "VTU",
+):
+    """
+    Execute a Ridamsub request with a local transaction record.
+
+    - Creates and commits a unique local reference before the API request.
+    - Sends only documented Ridamsub purchase fields.
+    - Marks a transaction successful only after explicit provider success.
+    - Leaves uncertain outcomes pending for reconciliation.
+    - Does not debit/refund the customer wallet.
+    - Does not retry or activate any purchase route.
+    """
+
+    import logging
+
+    logger = logging.getLogger(__name__)
+
+    # Validate local configuration before creating a transaction.
+    if not RIDAMSUB_API_KEY:
+        raise HTTPException(
+            status_code=503,
+            detail="Ridamsub provider is not configured.",
+        )
+
+    network_key = network.strip().lower()
+
+    if network_key not in RIDAMSUB_NETWORKS:
+        raise HTTPException(
+            status_code=400,
+            detail="Unsupported network.",
+        )
+
+    if (
+        not phone
+        or len(phone) != 11
+        or not phone.isdigit()
+        or not phone.startswith("0")
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="A valid 11-digit Nigerian phone number is required.",
+        )
+
+    if local_amount <= 0:
+        raise HTTPException(
+            status_code=400,
+            detail="A valid local transaction amount is required.",
+        )
+
+    if plan_id is not None:
+        if (
+            not isinstance(plan_id, int)
+            or isinstance(plan_id, bool)
+            or plan_id <= 0
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid data plan ID.",
+            )
+
+        payload = {
+            "network": RIDAMSUB_NETWORKS[network_key],
+            "mobile_number": phone,
+            "Ported_number": True,
+            "plan": plan_id,
+        }
+        endpoint = f"{RIDAMSUB_BASE_URL}/api/data/"
+        transaction_type = "data_purchase"
+
+    else:
+        if amount is None or amount <= 0:
+            raise HTTPException(
+                status_code=400,
+                detail="A valid airtime amount is required.",
+            )
+
+        if airtime_type not in {"VTU", "Share and Sell"}:
+            raise HTTPException(
+                status_code=400,
+                detail="Unsupported airtime type.",
+            )
+
+        payload = {
+            "network": RIDAMSUB_NETWORKS[network_key],
+            "mobile_number": phone,
+            "Ported_number": True,
+            "amount": float(amount),
+            "airtime_type": airtime_type,
+        }
+        endpoint = f"{RIDAMSUB_BASE_URL}/api/topup/"
+        transaction_type = "airtime_purchase"
+
+    # Step 1: Save a unique local transaction before contacting the provider.
+    local_reference = secrets.token_urlsafe(24)
+
+    transaction = WalletTransaction(
+        user_id=user_id,
+        transaction_type=transaction_type,
+        amount=local_amount,
+        status="pending",
+        reference=local_reference,
+        gateway="ridamsub",
+    )
+
+    try:
+        db.add(transaction)
+        db.commit()
+        db.refresh(transaction)
+    except Exception:
+        db.rollback()
+        logger.exception("Could not save local Ridamsub transaction.")
+        raise HTTPException(
+            status_code=500,
+            detail="Could not create the local transaction record.",
+        )
+
+    # Step 2: Send the standard provider payload once.
+    try:
+        response = httpx.post(
+            endpoint,
+            headers={
+                "Authorization": f"Token {RIDAMSUB_API_KEY}",
+                "Content-Type": "application/json",
+            },
+            json=payload,
+            timeout=20.0,
+        )
+
+    except httpx.RequestError:
+        # The provider may have processed the purchase even though the
+        # response was not received. Never retry automatically.
+        logger.exception(
+            "Ridamsub outcome uncertain; local_reference=%s",
+            local_reference,
+        )
+        raise HTTPException(
+            status_code=504,
+            detail={
+                "message": (
+                    "Ridamsub's response was not received. "
+                    "The transaction remains pending reconciliation. "
+                    "Do not retry this purchase yet."
+                ),
+                "reference": local_reference,
+                "status": "pending",
+            },
+        )
+
+    # Step 3: Parse the response without assuming malformed content is success.
+    try:
+        result = response.json()
+    except ValueError:
+        result = None
+
+    if response.status_code >= 500:
+        logger.warning(
+            "Ridamsub server error; local_reference=%s status_code=%s",
+            local_reference,
+            response.status_code,
+        )
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "message": (
+                    "Ridamsub returned a server error. "
+                    "The transaction remains pending reconciliation."
+                ),
+                "reference": local_reference,
+                "status": "pending",
+            },
+        )
+
+    if response.status_code >= 400:
+        # Do not assume the provider did not vend unless its documented
+        # response semantics establish that the request was rejected.
+        logger.warning(
+            "Ridamsub returned an HTTP error; local_reference=%s "
+            "status_code=%s response=%r",
+            local_reference,
+            response.status_code,
+            result,
+        )
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "message": (
+                    "Ridamsub returned an error. Check the provider "
+                    "transaction log before retrying or refunding."
+                ),
+                "reference": local_reference,
+                "status": "pending",
+            },
+        )
+
+    if (
+        not isinstance(result, dict)
+        or result.get("Status") != "successful"
+        or result.get("id") is None
+    ):
+        logger.warning(
+            "Ridamsub did not confirm success; local_reference=%s",
+            local_reference,
+        )
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "message": (
+                    "Ridamsub did not confirm a successful transaction. "
+                    "The transaction remains pending reconciliation."
+                ),
+                "reference": local_reference,
+                "status": "pending",
+            },
+        )
+
+    # Step 4: Explicit success received. Preserve our local reference and
+    # record the provider ID in application logs for reconciliation.
+    provider_transaction_id = str(result["id"])
+
+    transaction.status = "success"
+
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
+        logger.exception(
+            "Provider reported success but local status update failed; "
+            "local_reference=%s provider_transaction_id=%s",
+            local_reference,
+            provider_transaction_id,
+        )
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "message": (
+                    "Ridamsub reported success, but the local transaction "
+                    "status could not be updated. Reconcile before retrying."
+                ),
+                "reference": local_reference,
+                "status": "pending",
+            },
+        )
+
+    logger.info(
+        "Ridamsub purchase confirmed; local_reference=%s "
+        "provider_transaction_id=%s",
+        local_reference,
+        provider_transaction_id,
+    )
+
+    return {
+        "status": "success",
+        "reference": local_reference,
+        "provider_transaction_id": provider_transaction_id,
+        "transaction_id": transaction.id,
+    }
 
 # =========================
 # PYDANTIC SCHEMAS
@@ -1198,6 +1488,52 @@ def admin_get_transactions(
     ]
 
 
+@app.get("/api/reconcile/{local_reference}")
+def inspect_ridamsub_reconciliation(
+    local_reference: str,
+    current_admin: Admin = Depends(get_current_admin),
+    db: Session = Depends(get_db),
+):
+    """
+    Inspect a local Ridamsub transaction for manual reconciliation.
+
+    This endpoint does not contact Ridamsub, retry purchases,
+    change transaction status, or issue refunds.
+    """
+
+    transaction = (
+        db.query(WalletTransaction)
+        .filter(
+            WalletTransaction.reference == local_reference,
+            WalletTransaction.gateway == "ridamsub",
+        )
+        .first()
+    )
+
+    if transaction is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Ridamsub transaction not found.",
+        )
+
+    return {
+        "local_reference": transaction.reference,
+        "transaction_id": transaction.id,
+        "user_id": transaction.user_id,
+        "transaction_type": transaction.transaction_type,
+        "amount": str(transaction.amount),
+        "status": transaction.status,
+        "next_action": (
+            "Verify the transaction in the Ridamsub provider panel "
+            "or a confirmed provider transaction log. Do not retry "
+            "or refund until the outcome is established."
+            if transaction.status == "pending"
+            else "Review the recorded transaction status."
+        ),
+    }
+
+
+
 # =========================
 # ADMIN AUDIT LOGS
 # =========================
@@ -1343,94 +1679,17 @@ APPROVED_DATA_PLANS = {
     }
 }
 
-# =========================
-# VTPASS DATA PLANS
-# =========================
 
 @app.get("/data/plans/{network}")
 def get_data_plans(network: str):
-    network_services = {
-        "mtn": "mtn-data",
-        "airtel": "airtel-data",
-        "glo": "glo-data",
-        "9mobile": "etisalat-data",
-    }
-
-    network_key = network.strip().lower()
-    service_id = network_services.get(network_key)
-
-    if not service_id:
-        raise HTTPException(
-            status_code=400,
-            detail="Unsupported network. Use mtn, airtel, glo, or 9mobile."
-        )
-
-    if not VTPASS_API_KEY or not VTPASS_PUBLIC_KEY:
-        raise HTTPException(
-            status_code=503,
-            detail="VTpass read-only credentials are not configured."
-        )
-
-    headers = {
-        "api-key": VTPASS_API_KEY,
-        "public-key": VTPASS_PUBLIC_KEY,
-        "Content-Type": "application/json",
-    }
-
-    try:
-        response = requests.get(
-            f"{VTPASS_BASE_URL}/service-variations",
-            params={"serviceID": service_id},
-            headers=headers,
-            timeout=30,
-        )
-        response.raise_for_status()
-        result = response.json()
-
-    except (requests.RequestException, ValueError):
-        raise HTTPException(
-            status_code=502,
-            detail="Unable to retrieve data plans from VTpass."
-        )
-
-    if str(result.get("response_description", "")) != "000":
-        raise HTTPException(
-            status_code=502,
-            detail="VTpass did not return a successful data-plan response."
-        )
-
-    content = result.get("content") or {}
-    variations = content.get("variations") or []
-
-    approved_plans = APPROVED_DATA_PLANS.get(network_key, {})
-
-    plans = []
-
-    for plan in variations:
-        variation_code = str(
-            plan.get("variation_code") or ""
-        ).strip()
-
-        approved = approved_plans.get(variation_code)
-
-        if not approved:
-            continue
-
-        plans.append({
-            "variation_code": variation_code,
-            "name": approved["name"],
-            "amount": approved["selling_price"],
-        })
-
-    return {
-        "network": network_key,
-        "service_name": content.get("ServiceName"),
-        "plans": plans,
-    }
+    raise HTTPException(
+        status_code=503,
+        detail="Data plans are temporarily unavailable while the new provider is being integrated.",
+    )
 
 # =========================
-# VTPASS DATA PURCHASE
-# DISABLED UNTIL AUTHENTICATION IS RESOLVED
+# DATA PURCHASE
+# TEMPORARILY DISABLED
 # =========================
 
 @app.post("/data/purchase")
@@ -1441,343 +1700,33 @@ def purchase_data(
 ):
     raise HTTPException(
         status_code=503,
-        detail=(
-            "Data purchases are temporarily disabled while "
-            "VTpass authentication is being resolved."
-        ),
+        detail="Data purchases are temporarily disabled while the new provider is being integrated.",
     )
-
-
-def generate_vtpass_request_id() -> str:
-    nigeria_timezone = pytz.timezone("Africa/Lagos")
-    timestamp = datetime.now(nigeria_timezone).strftime("%Y%m%d%H%M")
-    return timestamp + secrets.token_hex(4)
 
 
 @app.post("/airtime/purchase")
 def purchase_airtime(
     request: AirtimePurchaseRequest,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
 ):
-    if not VTPASS_API_KEY or not VTPASS_SECRET_KEY:
-        raise HTTPException(
-            status_code=503,
-            detail="VTpass sandbox credentials are not configured."
-        )
+    raise HTTPException(
+        status_code=503,
+        detail="Airtime purchases are temporarily disabled while the new provider is being integrated.",
+    )
 
-    amount = Decimal(str(request.amount))
-
-    if amount != amount.quantize(Decimal("0.01")):
-        raise HTTPException(
-            status_code=400,
-            detail="Amount must have no more than two decimal places."
-        )
-
-    # Generate the VTpass request ID using Nigeria's local time.
-    reference = generate_vtpass_request_id()
-
-    # Reserve funds and create the pending transaction atomically.
-    try:
-        user = (
-            db.query(User)
-            .filter(User.id == current_user.id)
-            .with_for_update()
-            .first()
-        )
-
-        if not user:
-            raise HTTPException(
-                status_code=404,
-                detail="Customer account not found."
-            )
-
-        if user.wallet_balance < amount:
-            raise HTTPException(
-                status_code=400,
-                detail="Insufficient wallet balance."
-            )
-
-        transaction = WalletTransaction(
-            user_id=user.id,
-            transaction_type="airtime",
-            amount=amount,
-            status="pending",
-            reference=reference,
-            gateway="vtpass"
-        )
-
-        user.wallet_balance -= amount
-        db.add(transaction)
-        db.commit()
-        db.refresh(transaction)
-
-    except HTTPException:
-        db.rollback()
-        raise
-    except Exception:
-        db.rollback()
-        raise HTTPException(
-            status_code=500,
-            detail="Unable to reserve wallet funds."
-        )
-
-    # Send the airtime purchase to VTpass sandbox.
-    
-    payload = {
-    "request_id": reference,
-    "serviceID": {
-        "MTN": "mtn",
-        "Airtel": "airtel",
-        "Glo": "glo",
-        "9mobile": "etisalat"
-    }[request.network],
-    "amount": float(amount),
-    "phone": request.phone
-}
-
-
-    try:
-        response = requests.post(
-            f"{VTPASS_BASE_URL}/pay",
-            json=payload,
-            headers=get_vtpass_headers(),
-            timeout=30
-        )
-        result = response.json()
-
-    except (requests.RequestException, ValueError):
-        # The request may have reached VTpass.
-        # Keep funds reserved until the outcome is checked.
-        return {
-            "message": (
-                "Purchase outcome is uncertain. "
-                "Do not retry this purchase yet."
-            ),
-            "status": "pending",
-            "reference": reference,
-            "amount": float(amount)
-        }
-
-    response_code = str(result.get("code", ""))
-    content = result.get("content") or {}
-    details = content.get("transactions") or {}
-    vtpass_status = str(details.get("status", "")).lower()
-
-    # Only accept an explicit delivery confirmation.
-    if response_code == "000" and vtpass_status == "delivered":
-        try:
-            transaction.status = "success"
-            db.commit()
-            db.refresh(user)
-
-            return {
-                "message": "Airtime purchase successful.",
-                "status": "success",
-                "reference": reference,
-                "network": request.network,
-                "phone": request.phone,
-                "amount": float(amount),
-                "wallet_balance": float(user.wallet_balance)
-            }
-
-        except Exception:
-            db.rollback()
-            # Do not refund automatically: VTpass may have delivered.
-            return {
-                "message": (
-                    "VTpass reported delivery, but the local "
-                    "record needs reconciliation."
-                ),
-                "status": "pending",
-                "reference": reference,
-                "amount": float(amount)
-            }
-
-    # Refund only when VTpass explicitly reports failure.
-    if vtpass_status in ("failed", "failure"):
-        try:
-            user = (
-                db.query(User)
-                .filter(User.id == current_user.id)
-                .with_for_update()
-                .first()
-            )
-
-            transaction = (
-                db.query(WalletTransaction)
-                .filter(
-                    WalletTransaction.reference == reference,
-                    WalletTransaction.user_id == current_user.id
-                )
-                .with_for_update()
-                .first()
-            )
-
-            if not user or not transaction:
-                db.rollback()
-                return {
-                    "message": "Purchase requires reconciliation.",
-                    "status": "pending",
-                    "reference": reference
-                }
-
-            if transaction.status == "pending":
-                user.wallet_balance += transaction.amount
-                transaction.status = "failed"
-                db.commit()
-
-            return {
-                "message": "Airtime purchase failed; funds refunded.",
-                "status": "failed",
-                "reference": reference,
-                "wallet_balance": float(user.wallet_balance)
-            }
-
-        except Exception:
-            db.rollback()
-            return {
-                "message": "Refund requires reconciliation.",
-                "status": "pending",
-                "reference": reference
-            }
-
-    # Processing, unfamiliar responses, and other uncertain outcomes
-    # must not be marked successful or automatically refunded.
-    return {
-        "message": (
-            "VTpass has not confirmed delivery or failure. "
-            "Do not retry this purchase yet."
-        ),
-        "status": "pending",
-        "reference": reference,
-        "amount": float(amount),
-        "vtpass_response": result
-    }
 
 
 @app.post("/airtime/verify/{reference}")
 def verify_airtime_purchase(
     reference: str,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
 ):
-    transaction = (
-        db.query(WalletTransaction)
-        .filter(
-            WalletTransaction.reference == reference,
-            WalletTransaction.user_id == current_user.id,
-            WalletTransaction.transaction_type == "airtime",
-            WalletTransaction.gateway == "vtpass"
-        )
-        .with_for_update()
-        .first()
+    raise HTTPException(
+        status_code=503,
+        detail="Airtime transaction verification is temporarily disabled while the new provider is being integrated.",
     )
-
-    if not transaction:
-        raise HTTPException(
-            status_code=404,
-            detail="Airtime transaction not found."
-        )
-
-    if transaction.status in ("success", "failed"):
-        return {
-            "reference": reference,
-            "status": transaction.status,
-            "amount": float(transaction.amount)
-        }
-
-    try:
-        response = requests.post(
-            f"{VTPASS_BASE_URL}/requery",
-            json={"request_id": reference},
-            headers=get_vtpass_headers(),
-            timeout=30
-        )
-        response.raise_for_status()
-        result = response.json()
-
-    except (requests.RequestException, ValueError):
-        raise HTTPException(
-            status_code=502,
-            detail=(
-                "Unable to confirm the VTpass transaction. "
-                "Your transaction remains pending; do not retry the purchase."
-            )
-        )
-
-    code = str(result.get("code", ""))
-    content = result.get("content") or {}
-    details = content.get("transactions") or {}
-    status = str(details.get("status", "")).lower()
-
-    # Confirmed delivery
-    if code == "000" and status == "delivered":
-        transaction.status = "success"
-        db.commit()
-
-        return {
-            "reference": reference,
-            "status": "success",
-            "amount": float(transaction.amount)
-        }
-
-    # Refund only for documented terminal outcomes.
-    definitive_failure = (
-        code in ("016", "091")
-        or (code == "040" and status == "reversed")
-    )
-
-    if definitive_failure:
-        user = (
-            db.query(User)
-            .filter(User.id == current_user.id)
-            .with_for_update()
-            .first()
-        )
-
-        if not user:
-            db.rollback()
-            raise HTTPException(
-                status_code=404,
-                detail="Customer account not found."
-            )
-
-        # The transaction row is locked; refund only once.
-        if transaction.status == "pending":
-            user.wallet_balance += transaction.amount
-            transaction.status = "failed"
-            db.commit()
-
-            return {
-                "reference": reference,
-                "status": "failed",
-                "message": "Purchase failed; funds refunded.",
-                "wallet_balance": float(user.wallet_balance)
-            }
-
-        db.rollback()
-
-        return {
-            "reference": reference,
-            "status": transaction.status,
-            "message": "Transaction status was already updated."
-        }
-
-    # Unclear or non-final response: never refund automatically.
-    db.rollback()
-
-    return {
-        "reference": reference,
-        "status": "pending",
-        "message": (
-            "VTpass has not confirmed a final result. "
-            "Do not submit another purchase."
-        ),
-        "vtpass_code": code,
-        "vtpass_description": result.get("response_description"),
-        "vtpass_status": status or None
-    }
 
 
 @app.post("/wallet/fund")
