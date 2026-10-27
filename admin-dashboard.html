@@ -695,28 +695,72 @@
         }
 
         async function api(path, options = {}) {
-            const response = await fetch(path, {
-                ...options,
-                headers: {
-                    "Authorization": `Bearer ${token}`,
-                    ...(options.body ? { "Content-Type": "application/json" } : {}),
-                    ...(options.headers || {})
-                }
-            });
+            let response;
+
+            try {
+                response = await fetch(path, {
+                    ...options,
+                    headers: {
+                        "Authorization": `Bearer ${token}`,
+                        ...(options.body
+                            ? { "Content-Type": "application/json" }
+                            : {}),
+                        ...(options.headers || {})
+                    }
+                });
+            } catch (error) {
+                const networkError = new Error(
+                    "We could not reach the server. Check your connection and verify the transaction status before trying again."
+                );
+                networkError.code = "NETWORK_ERROR";
+                throw networkError;
+            }
 
             if (response.status === 401 || response.status === 403) {
                 logout();
-                throw new Error("Your admin session has expired. Please log in again.");
+                throw new Error(
+                    "Your admin session has expired. Please log in again."
+                );
             }
 
             const data = await response.json().catch(() => ({}));
 
             if (!response.ok) {
-                throw new Error(data.detail || data.message || "Request failed.");
+                const detail = data?.detail;
+                const reference =
+                    typeof detail === "object" && detail !== null
+                        ? detail.reference
+                        : data?.reference;
+
+                let message =
+                    typeof detail === "string"
+                        ? detail
+                        : detail?.message || data?.message;
+
+                if (response.status === 504) {
+                    message =
+                        "The provider's response could not be confirmed. The transaction may still be processing. Verify its status before retrying.";
+                } else if (response.status === 502) {
+                    message =
+                        "The provider has not confirmed a successful transaction. Verify its status before retrying.";
+                } else if (!message) {
+                    message = `Request failed (HTTP ${response.status}).`;
+                }
+
+                if (reference) {
+                    message += ` Reference: ${reference}`;
+                }
+
+                const apiError = new Error(message);
+                apiError.status = response.status;
+                apiError.reference = reference || null;
+                throw apiError;
             }
 
             return data;
         }
+
+
 
         function getArray(data, keys) {
             if (Array.isArray(data)) return data;

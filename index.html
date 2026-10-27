@@ -746,7 +746,7 @@
 
                 });
 
-                const data = await response.json();
+                const data = await response.json().catch(() => ({}));
 
                 if (!response.ok) {
 
@@ -1184,7 +1184,7 @@ async function buyAirtime() {
             })
         });
 
-        const data = await response.json();
+        const data = await response.json().catch(() => ({}));
 
         if (response.ok) {
             message.textContent =
