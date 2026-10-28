@@ -1,11 +1,12 @@
 fastapi
-uvicorn
+uvicorn[standard]
 gunicorn
 httpx
 sqlalchemy
-psycopg-binary
+psycopg2-binary
 python-dotenv
 python-multipart
 pwdlib[argon2]
 pyjwt
 certifi>=2026.10.19
+requests
