@@ -3,7 +3,7 @@ uvicorn[standard]
 gunicorn
 httpx
 sqlalchemy
-psycopg2-binary
+psycopg[binary]
 python-dotenv
 python-multipart
 pwdlib[argon2]
