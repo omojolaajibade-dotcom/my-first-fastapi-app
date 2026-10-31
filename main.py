@@ -1,2780 +1,6523 @@
 import os
 
+
+
 import secrets
+
+
 
 import hashlib
 
+
+
 import hmac
+
+
 
 import json
 
+
+
 import requests
+
+
 
 from decimal import Decimal
 
+
+
 from datetime import datetime, timedelta, timezone
+
+
 
 import jwt
 
+
+
 import uuid
+
+
 
 import httpx
 
+
+
+from fastapi import Header
+
+
+
 from dotenv import load_dotenv
+
+
 
 from fastapi import HTTPException
 
+
+
 from config import RIDAMSUB_NETWORKS, RIDAMSUB_DATA_PLANS
+
+
 
 from fastapi import Depends, FastAPI, HTTPException, Request, Query
 
+
+
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+
+
 
 from fastapi.responses import FileResponse, RedirectResponse
 
+
+
 from pydantic import BaseModel, Field, EmailStr
 
+
+
 from sqlalchemy import (
+
     Column, DateTime, Integer, String, Boolean, Numeric,
+
     create_engine, func, update
+
 )
+
 from sqlalchemy.orm import declarative_base, sessionmaker, Session
+
+
 
 from pwdlib import PasswordHash
 
+
+
 # =========================
+
 # LOAD ENVIRONMENT VARIABLES
+
 # =========================
+
+
 
 load_dotenv()
 
 
+
+
+
 # =========================
+
 # DATABASE, JWT AND PAYSTACK CONFIGURATION
+
 # =========================
+
+
 
 DATABASE_URL = os.getenv("DATABASE_URL")
 
+
+
 if not DATABASE_URL:
+
     raise RuntimeError("DATABASE_URL is not configured")
 
+
+
 JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY")
+
 PAYSTACK_SECRET_KEY = os.getenv("PAYSTACK_SECRET_KEY")
+
 RIDAMSUB_API_KEY = os.getenv("RIDAMSUB_API_KEY")
+
 RIDAMSUB_BASE_URL = "https://ridamsub.com"
+
+# VENDING: ENABLED FOR CONTROLLED LIVE TESTING.
+
+RIDAMSUB_PURCHASES_ENABLED = True
+
+# These statuses must be confirmed against Ridamsub's
+
+# documented API contract before enabling automatic refunds.
+
+RIDAMSUB_DEFINITIVE_REJECTION_STATUSES = {
+
+    "failed",
+
+    "rejected",
+
+}
+
 PAYSTACK_BASE_URL = "https://api.paystack.co"
 
+
+
 if not JWT_SECRET_KEY:
+
     raise RuntimeError("JWT_SECRET_KEY is not configured")
 
+
+
 if not PAYSTACK_SECRET_KEY:
+
     raise RuntimeError("PAYSTACK_SECRET_KEY is not configured")
 
+
+
 JWT_ALGORITHM = "HS256"
+
 JWT_EXPIRE_MINUTES = 60
 
 
+
+
+
 # =========================
+
 # DATABASE SETUP
+
 # =========================
+
+
 
 engine = create_engine(DATABASE_URL)
 
+
+
 SessionLocal = sessionmaker(
+
     autocommit=False,
+
     autoflush=False,
+
     bind=engine
+
 )
+
+
 
 Base = declarative_base()
 
 
+
+
+
 def get_db():
+
     db = SessionLocal()
 
+
+
     try:
+
         yield db
 
+
+
     finally:
+
         db.close()
 
 
+
+
+
 # =========================
+
 # USER MODEL
+
 # =========================
+
+
 
 class User(Base):
+
     __tablename__ = "users"
 
+
+
     id = Column(
+
         Integer,
+
         primary_key=True,
+
         index=True
+
     )
+
+
 
     name = Column(
+
         String(100),
+
         nullable=False
+
     )
+
+
 
     phone = Column(
+
         String(20),
+
         unique=True,
+
         nullable=False,
+
         index=True
+
     )
+
+
 
     email = Column(
+
         String(255),
+
         nullable=True,
+
         index=True
+
     )
 
+
+
     password_hash = Column(
+
         String(255),
+
         nullable=True
+
     )
+
+
 
     wallet_balance = Column(Numeric(12, 2), nullable=False, default=0.00)
 
+
+
     created_at = Column(
+
         DateTime,
+
         nullable=False,
+
         server_default=func.current_timestamp()
+
     )
 
+
+
 # =========================
+
 # ADMIN MODEL
+
 # =========================
+
+
 
 class Admin(Base):
+
     __tablename__ = "admins"
 
+
+
     id = Column(
+
         Integer,
+
         primary_key=True,
+
         index=True
+
     )
+
+
 
     username = Column(
+
         String(100),
+
         unique=True,
+
         nullable=False,
+
         index=True
+
     )
+
+
 
     email = Column(
+
         String(255),
+
         nullable=True)
 
+
+
     password_hash = Column(
+
         String(255),
+
         nullable=False
+
     )
+
+
 
     is_active = Column(
+
         Boolean,
+
         nullable=False,
+
         default=True
+
     )
+
+
 
     wallet_balance = Column(
+
         Numeric(12, 2),
+
         nullable=False,
+
         default=Decimal("0.00"),
+
         server_default="0.00"
+
     )
+
+
 
     created_at = Column(
+
         DateTime,
+
         nullable=False,
+
         server_default=func.current_timestamp()
+
     )
 
 
 
+
+
+
+
 # =========================
+
 # ADMIN AUDIT LOG MODEL
+
 # =========================
+
+
 
 class AdminAuditLog(Base):
+
     __tablename__ = "admin_audit_logs"
 
+
+
     id = Column(
+
         Integer,
+
         primary_key=True,
+
         index=True
+
     )
+
+
+
 
 
     admin_id = Column(
+
     Integer,
+
     nullable=False,
+
     index=True
+
 )
 
 
+
+
+
     user_id = Column(
+
         Integer,
+
         nullable=True,
+
         index=True
+
     )
+
+
 
     action = Column(
+
     String(50),
+
     nullable=False,
+
     index=True
+
 )
+
+
 
     amount = Column(
+
         Numeric,
+
         nullable=True
+
     )
+
+
 
     reason = Column(
+
     String(255),
+
     nullable=False
+
     )
+
+
 
     reference = Column(
+
     String(100),
+
     nullable=True,
+
     unique=True
+
 )
 
+
+
     created_at = Column(
+
         DateTime,
+
         nullable=False,
+
         server_default=func.current_timestamp(),
+
         index=True
+
     )
 
 
+
+
+
 # =========================
+
 # PASSWORD RESET TOKEN MODEL
+
 # =========================
+
+
 
 class PasswordResetToken(Base):
+
     __tablename__ = "password_reset_tokens"
 
+
+
     id = Column(
+
         Integer,
+
         primary_key=True,
+
         index=True
+
     )
+
+
 
     user_id = Column(
+
         Integer,
+
         nullable=False
+
     )
+
+
 
     token_hash = Column(
+
         String(255),
+
         nullable=False
+
     )
+
+
 
     expires_at = Column(
+
         DateTime,
+
         nullable=False
+
     )
+
+
 
     used = Column(
+
         Boolean,
+
         nullable=False,
+
         default=False
+
     )
 
+
+
     created_at = Column(
+
         DateTime,
+
         nullable=False,
+
         server_default=func.current_timestamp()
+
     )
+
+
+
+
 
 
 
 class WalletTransaction(Base):
+
     __tablename__ = "wallet_transactions"
+
+
 
     id = Column(Integer, primary_key=True, index=True)
 
+
+
     # A transaction belongs to a customer OR an admin.
+
     user_id = Column(Integer, nullable=True, index=True)
+
     admin_id = Column(Integer, nullable=True, index=True)
 
+
+
     transaction_type = Column(String(30), nullable=False)
+
     amount = Column(Numeric(12, 2), nullable=False)
+
     status = Column(String(20), nullable=False, default="pending")
+
     reference = Column(String(100), unique=True, nullable=False)
+
     gateway = Column(String(30), nullable=True)
 
+
+
+     # Ridamsub transaction tracking
+
+    provider_transaction_id = Column(String(100), nullable=True, index=True)
+
+    idempotency_key = Column(String(100), nullable=True)
+
+
+
     created_at = Column(
+
         DateTime,
+
         nullable=False,
+
         server_default=func.current_timestamp()
+
     )
 
+
+
 # Create tables during normal startup, but let Alembic
+
 # manage schema changes when running migrations.
+
 if os.getenv("OMOTECH_SKIP_CREATE_ALL") != "1":
+
     Base.metadata.create_all(bind=engine)
 
-# =========================
-# FASTAPI APP
+
+
+# ============================================================
+
+# RIDAMSUB PURCHASE + RECONCILIATION
+
+# Uses the existing User, WalletTransaction, SessionLocal,
+
+# get_db, get_current_user and RIDAMSUB_DATA_PLANS definitions.
+
+# ============================================================
+
+
+
+import asyncio
+
+import logging
+
+import os
+
+from decimal import Decimal, InvalidOperation
+
+from urllib.parse import quote
+
+
+
+import httpx
+
+from fastapi import BackgroundTasks, Depends, HTTPException
+
+from sqlalchemy.orm import Session
+
+
+
+logger = logging.getLogger(__name__)
+
+
+
+RIDAMSUB_BASE_URL = os.getenv(
+
+    "RIDAMSUB_BASE_URL", "https://ridamsub.com"
+
+).rstrip("/")
+
+
+
+PENDING_REQUERY = "PENDING_REQUERY"
+
+
+
+NETWORK_IDS = {
+
+    "mtn": 1,
+
+    "glo": 2,
+
+    "9mobile": 3,
+
+    "airtel": 4,
+
+}
+
+
+
+
+
+def ridamsub_headers():
+
+    """Read credentials from the environment on each request."""
+
+    token = os.environ.get("RIDAMSUB_API_KEY")
+
+    if not token:
+
+        raise RuntimeError("RIDAMSUB_API_KEY is not configured")
+
+
+
+    return {
+
+        "Authorization": f"Token {token}",
+
+        "Content-Type": "application/json",
+
+    }
+
+
+
+
+
+
+
+def normalize_provider_status(response_json):
+
+    """Safely normalize Ridamsub purchase response statuses."""
+
+    if not isinstance(response_json, dict):
+
+        return PENDING_REQUERY
+
+
+
+    # Support both response field formats.
+
+    value = (
+
+        response_json.get("Status")
+
+        or response_json.get("status")
+
+    )
+
+
+
+    if not isinstance(value, str):
+
+        return PENDING_REQUERY
+
+
+
+    value = value.strip().lower()
+
+
+
+    # Confirmed success indicators.
+
+    if value in {"successful", "success", "completed"}:
+
+        return "success"
+
+
+
+    # Definitive failure indicators.
+
+    if value in {"fail", "failed", "failure", "reversed"}:
+
+        return "failed"
+
+
+
+    # Pending, processing, and unknown responses remain unresolved.
+
+    return PENDING_REQUERY
+
+
+
+
+
+def resolve_purchase_amount(purchase_type, network, plan_id, amount):
+
+    """Determine the customer charge before touching the wallet."""
+
+    if purchase_type == "airtime":
+
+        try:
+
+            result = Decimal(str(amount))
+
+        except (InvalidOperation, TypeError, ValueError):
+
+            raise HTTPException(status_code=400, detail="Invalid airtime amount.")
+
+
+
+        if not result.is_finite() or result <= 0:
+
+            raise HTTPException(status_code=400, detail="Invalid airtime amount.")
+
+
+
+        return result.quantize(Decimal("0.01"))
+
+
+
+    if purchase_type != "data":
+
+        raise HTTPException(status_code=400, detail="Unsupported purchase type.")
+
+
+
+    network_key = network.strip().lower()
+
+    matched_price = None
+
+
+
+    for plan in RIDAMSUB_DATA_PLANS.get(network_key, []):
+
+        if str(plan.get("plan_id")) == str(plan_id):
+
+            try:
+
+                matched_price = Decimal(str(plan.get("selling_price")))
+
+            except (InvalidOperation, TypeError, ValueError):
+
+                matched_price = None
+
+            break
+
+
+
+    if (
+
+        matched_price is None
+
+        or not matched_price.is_finite()
+
+        or matched_price <= 0
+
+    ):
+
+        raise HTTPException(
+
+            status_code=400,
+
+            detail="Requested data plan configuration not found.",
+
+        )
+
+
+
+    return matched_price.quantize(Decimal("0.01"))
+
+
+
+
+
+def apply_provider_result(reference, provider_status):
+
+    """
+
+    Apply a provider result under row locks.
+
+
+
+    A definitive failure and its refund are committed atomically.
+
+    Only a pending transaction can be refunded by this routine.
+
+    """
+
+    db = SessionLocal()
+
+
+
+    try:
+
+        tx = (
+
+            db.query(WalletTransaction)
+
+            .filter(
+
+                WalletTransaction.reference == reference,
+
+                WalletTransaction.gateway == "ridamsub",
+
+            )
+
+            .with_for_update()
+
+            .first()
+
+        )
+
+
+
+        if tx is None:
+
+            db.rollback()
+
+            return {"status": "not_found"}
+
+
+
+        # A terminal result must never be applied a second time.
+
+        if tx.status in {"success", "failed"}:
+
+            db.rollback()
+
+            return {"status": tx.status}
+
+
+
+        if tx.status not in {"pending", PENDING_REQUERY}:
+
+            db.rollback()
+
+            return {"status": tx.status}
+
+
+
+        if provider_status == PENDING_REQUERY:
+
+            tx.status = PENDING_REQUERY
+
+            db.commit()
+
+            return {"status": PENDING_REQUERY}
+
+
+
+        if provider_status == "success":
+
+            tx.status = "success"
+
+            db.commit()
+
+            return {"status": "success"}
+
+
+
+        if provider_status != "failed":
+
+            db.rollback()
+
+            return {"status": PENDING_REQUERY}
+
+
+
+        # Lock and credit the customer in the same transaction.
+
+        user = (
+
+            db.query(User)
+
+            .filter(User.id == tx.user_id)
+
+            .with_for_update()
+
+            .first()
+
+        )
+
+
+
+        if user is None:
+
+            db.rollback()
+
+            logger.error(
+
+                "Refund blocked: customer missing for reference %s",
+
+                reference,
+
+            )
+
+            return {"status": PENDING_REQUERY}
+
+
+
+        user.wallet_balance = (
+
+            Decimal(str(user.wallet_balance))
+
+            + Decimal(str(tx.amount))
+
+        )
+
+        tx.status = "failed"
+
+
+
+        db.commit()
+
+        return {"status": "failed", "refunded": True}
+
+
+
+    except Exception:
+
+        db.rollback()
+
+        logger.exception("Could not apply provider result for %s", reference)
+
+        return {"status": PENDING_REQUERY}
+
+
+
+    finally:
+
+        db.close()
+
+
+
+
+
+async def query_ridamsub_status(purchase_type, reference):
+
+    """
+
+    Query transaction status only. This function never creates a purchase.
+
+    Confirm the provider's documented status endpoint before production use.
+
+    """
+
+    if purchase_type not in {"airtime", "data"}:
+
+        return PENDING_REQUERY
+
+
+
+    endpoint = "topup" if purchase_type == "airtime" else "data"
+
+    url = (
+
+        f"{RIDAMSUB_BASE_URL}/api/{endpoint}/"
+
+        f"{quote(reference, safe='')}/"
+
+    )
+
+
+
+    try:
+
+        async with httpx.AsyncClient(timeout=10.0) as client:
+
+            response = await client.get(
+
+                url,
+
+                headers=ridamsub_headers(),
+
+            )
+
+
+
+        if response.status_code != 200:
+
+            logger.warning(
+
+                "Ridamsub status query HTTP %s for %s",
+
+                response.status_code,
+
+                reference,
+
+            )
+
+            return PENDING_REQUERY
+
+
+
+        try:
+
+            return normalize_provider_status(response.json())
+
+        except ValueError:
+
+            return PENDING_REQUERY
+
+
+
+    except (httpx.HTTPError, RuntimeError):
+
+        logger.exception("Status query failed for %s", reference)
+
+        return PENDING_REQUERY
+
+
+
+
+
+async def reconcile_pending_transaction(reference, expected_type, user_id=None):
+
+    """
+
+    Reconcile a transaction after an uncertain outcome.
+
+    No automatic purchase retry is performed.
+
+    """
+
+    db = SessionLocal()
+
+
+
+    try:
+
+        tx = (
+
+            db.query(WalletTransaction)
+
+            .filter(
+
+                WalletTransaction.reference == reference,
+
+                WalletTransaction.gateway == "ridamsub",
+
+                WalletTransaction.transaction_type
+
+                == f"{expected_type}_purchase",
+
+            )
+
+            .first()
+
+        )
+
+
+
+        if tx is None or (user_id is not None and tx.user_id != user_id):
+
+            return {"status": "not_found"}
+
+
+
+        if tx.status in {"success", "failed"}:
+
+            return {"status": tx.status}
+
+
+
+    finally:
+
+        db.close()
+
+
+
+    provider_status = await query_ridamsub_status(
+
+        expected_type, reference
+
+    )
+
+
+
+    result = apply_provider_result(reference, provider_status)
+
+
+
+    # Recheck the transaction type and ownership before exposing results.
+
+    if user_id is not None:
+
+        check_db = SessionLocal()
+
+        try:
+
+            check = (
+
+                check_db.query(WalletTransaction)
+
+                .filter(WalletTransaction.reference == reference)
+
+                .first()
+
+            )
+
+            if (
+
+                check is None
+
+                or check.user_id != user_id
+
+                or check.transaction_type != f"{expected_type}_purchase"
+
+            ):
+
+                return {"status": "not_found"}
+
+        finally:
+
+            check_db.close()
+
+
+
+    return result
+
+
+
+
+
+async def background_reconcile(reference, expected_type):
+
+    """
+
+    Retry transaction STATUS CHECKS only.
+
+    Never submit another purchase request.
+
+    """
+
+    for attempt in range(3):
+
+        try:
+
+            result = await reconcile_pending_transaction(
+
+                reference, expected_type
+
+            )
+
+
+
+            if result.get("status") != PENDING_REQUERY:
+
+                logger.info(
+
+                    "Ridamsub reconciliation completed for %s: %s",
+
+                    reference,
+
+                    result.get("status"),
+
+                )
+
+                return result
+
+
+
+        except Exception:
+
+            logger.exception(
+
+                "Ridamsub reconciliation attempt %s failed for %s",
+
+                attempt + 1,
+
+                reference,
+
+            )
+
+
+
+        if attempt < 2:
+
+            await asyncio.sleep(2 ** attempt)
+
+
+
+    logger.warning(
+
+        "Ridamsub transaction remains pending: %s",
+
+        reference,
+
+    )
+
+
+
+    return {"status": PENDING_REQUERY}
+
+
+
+async def execute_ridamsub_purchase(
+
+    db: Session,
+
+    user_id: int,
+
+    purchase_type: str,
+
+    network: str,
+
+    phone: str,
+
+    idempotency_key: str,
+
+    plan_id: int | None = None,
+
+    amount: Decimal | None = None,
+
+    airtime_type: str = "VTU",
+
+    background_tasks: BackgroundTasks | None = None,
+
+):
+
+    """
+
+    Reserve wallet funds, create one local transaction,
+
+    submit one Ridamsub purchase request, and record its response.
+
+
+
+    Never repeat a purchase POST when its outcome is uncertain.
+
+    """
+
+
+
+    if not RIDAMSUB_PURCHASES_ENABLED:
+
+        raise HTTPException(
+
+            status_code=503,
+
+            detail="Ridamsub purchases are disabled.",
+
+        )
+
+
+
+    try:
+
+        headers = ridamsub_headers()
+
+    except RuntimeError:
+
+        raise HTTPException(
+
+            status_code=503,
+
+            detail="Ridamsub API configuration is unavailable.",
+
+        )
+
+
+
+    if purchase_type not in {"airtime", "data"}:
+
+        raise HTTPException(
+
+            status_code=400,
+
+            detail="Invalid purchase type.",
+
+        )
+
+
+
+    if not idempotency_key or not idempotency_key.strip():
+
+        raise HTTPException(
+
+            status_code=400,
+
+            detail="An idempotency key is required.",
+
+        )
+
+
+
+    network_key = network.strip().lower()
+
+    network_id = NETWORK_IDS.get(network_key)
+
+
+
+    if network_id is None:
+
+        raise HTTPException(
+
+            status_code=400,
+
+            detail="Unsupported network.",
+
+        )
+
+
+
+    final_amount = resolve_purchase_amount(
+
+        purchase_type,
+
+        network_key,
+
+        plan_id,
+
+        amount,
+
+    )
+
+
+
+    local_ref = (
+
+        f"OMOTECH_{purchase_type.upper()}_{secrets.token_hex(12)}"
+
+    )
+
+
+
+    # Reserve funds and check duplicate requests.
+
+    try:
+
+        user = (
+
+            db.query(User)
+
+            .filter(User.id == user_id)
+
+            .with_for_update()
+
+            .first()
+
+        )
+
+
+
+        if user is None:
+
+            raise HTTPException(
+
+                status_code=404,
+
+                detail="User not found.",
+
+            )
+
+
+
+        # Prevent a repeated request from creating another purchase.
+
+        existing_tx = (
+
+            db.query(WalletTransaction)
+
+            .filter(
+
+                WalletTransaction.user_id == user_id,
+
+                WalletTransaction.idempotency_key == idempotency_key,
+
+            )
+
+            .order_by(WalletTransaction.id.desc())
+
+            .first()
+
+        )
+
+
+
+        if existing_tx:
+
+            if (
+
+                existing_tx.transaction_type
+
+                != f"{purchase_type}_purchase"
+
+                or Decimal(str(existing_tx.amount)) != final_amount
+
+            ):
+
+                raise HTTPException(
+
+                    status_code=409,
+
+                    detail="This idempotency key was already used for a different purchase.",
+
+                )
+
+
+
+            return {
+
+                "reference": existing_tx.reference,
+
+                "transaction_type": existing_tx.transaction_type,
+
+                "amount": str(existing_tx.amount),
+
+                "status": existing_tx.status,
+
+                "message": (
+
+                    "This purchase request has already been recorded. "
+
+                    "Do not submit it again."
+
+                ),
+
+            }
+
+
+
+        current_balance = Decimal(str(user.wallet_balance))
+
+
+
+        if current_balance < final_amount:
+
+            raise HTTPException(
+
+                status_code=400,
+
+                detail="Insufficient wallet balance.",
+
+            )
+
+
+
+        user.wallet_balance = current_balance - final_amount
+
+
+
+        tx = WalletTransaction(
+
+            user_id=user_id,
+
+            transaction_type=f"{purchase_type}_purchase",
+
+            amount=final_amount,
+
+            status="pending",
+
+            reference=local_ref,
+
+            gateway="ridamsub",
+
+            idempotency_key=idempotency_key,
+
+        )
+
+
+
+        db.add(tx)
+
+        db.commit()
+
+        db.refresh(tx)
+
+
+
+    except HTTPException:
+
+        db.rollback()
+
+        raise
+
+
+
+    except Exception:
+
+        db.rollback()
+
+        logger.exception(
+
+            "Could not reserve wallet funds for Ridamsub purchase."
+
+        )
+
+        raise HTTPException(
+
+            status_code=500,
+
+            detail="Could not create the purchase transaction.",
+
+        )
+
+
+
+    # Build purchase request.
+
+    if purchase_type == "airtime":
+
+        endpoint = "/api/topup/"
+
+        payload = {
+
+            "network": network_id,
+
+            "amount": int(final_amount),
+
+            "mobile_number": phone,
+
+            "Ported_number": True,
+
+            "airtime_type": airtime_type,
+
+            "request-id": local_ref,
+
+        }
+
+
+
+    else:
+
+        endpoint = "/api/data/"
+
+        payload = {
+
+            "network": network_id,
+
+            "mobile_number": phone,
+
+            "plan": plan_id,
+
+            "Ported_number": True,
+
+            "request-id": local_ref,
+
+        }
+
+
+
+    # Submit exactly one purchase POST.
+
+    provider_status = PENDING_REQUERY
+
+
+
+    try:
+
+        async with httpx.AsyncClient(timeout=20.0) as client:
+
+            response = await client.post(
+
+                f"{RIDAMSUB_BASE_URL}{endpoint}",
+
+                headers=headers,
+
+                json=payload,
+
+            )
+
+
+
+        try:
+
+            response_json = response.json()
+
+        except ValueError:
+
+            response_json = None
+
+
+
+        logger.info(
+
+            "Ridamsub %s response: HTTP %s | Body: %s",
+
+            purchase_type,
+
+            response.status_code,
+
+            response.text[:1000],
+
+        )
+
+
+
+        if response.status_code >= 400:
+
+            provider_status = PENDING_REQUERY
+
+        else:
+
+            provider_status = normalize_provider_status(
+
+                response_json
+
+            )
+
+
+
+        # Capture a possible provider transaction identifier.
+
+        if isinstance(response_json, dict):
+
+            provider_id = (
+
+                response_json.get("ident")
+
+                or response_json.get("transaction_id")
+
+                or response_json.get("transid")
+
+                or response_json.get("id")
+
+            )
+
+
+
+            if provider_id is not None:
+
+                try:
+
+                    tx.provider_transaction_id = str(provider_id)[:100]
+
+                    db.commit()
+
+
+
+                    logger.info(
+
+                        "Saved Ridamsub provider ID for %s",
+
+                        local_ref,
+
+                    )
+
+
+
+                except Exception:
+
+                    db.rollback()
+
+                    logger.exception(
+
+                        "Could not save Ridamsub provider ID for %s",
+
+                        local_ref,
+
+                    )
+
+                    provider_status = PENDING_REQUERY
+
+
+
+    except httpx.HTTPError:
+
+        logger.exception(
+
+            "Ridamsub purchase outcome uncertain: %s",
+
+            local_ref,
+
+        )
+
+        provider_status = PENDING_REQUERY
+
+
+
+    except Exception:
+
+        logger.exception(
+
+            "Unexpected Ridamsub purchase error: %s",
+
+            local_ref,
+
+        )
+
+        provider_status = PENDING_REQUERY
+
+
+
+    # Apply the provider result to the existing transaction.
+
+    result = apply_provider_result(
+
+        local_ref,
+
+        provider_status,
+
+    )
+
+
+
+    if (
+
+        result.get("status") == PENDING_REQUERY
+
+        and background_tasks is not None
+
+    ):
+
+        background_tasks.add_task(
+
+            background_reconcile,
+
+            local_ref,
+
+            purchase_type,
+
+        )
+
+
+
+    return {
+
+        "reference": local_ref,
+
+        "transaction_type": f"{purchase_type}_purchase",
+
+        "amount": str(final_amount),
+
+        "status": result.get("status", PENDING_REQUERY),
+
+        "message": (
+
+            "Purchase confirmed."
+
+            if result.get("status") == "success"
+
+            else "The transaction is being reconciled. Do not retry the purchase."
+
+        ),
+
+    }
+
+
+
 # =========================
 
 app = FastAPI(
+
     title="Omotech Airtime & Data API",
+
     description="Backend API for the Omotech Airtime & Data application",
+
     version="1.0.0"
+
 )
 
 
+
+
+
+
+
 @app.get("/api/plans/{network}")
+
 def get_ridamsub_data_plans(network: str):
+
     network_key = network.strip().lower()
 
+
+
     if network_key not in RIDAMSUB_NETWORKS:
+
         raise HTTPException(
+
             status_code=404,
-            detail=(
-                "Unsupported network. "
-                "Available networks: mtn, airtel, glo, 9mobile."
-            ),
-        )
 
-    configured_plans = RIDAMSUB_DATA_PLANS.get(network_key, [])
-
-    customer_plans = [
-        {
-            "plan_id": plan["plan_id"],
-            "name": plan["name"],
-            "price": plan["selling_price"],
-        }
-        for plan in configured_plans
-        if (
-            plan.get("available") is True
-            and isinstance(plan.get("plan_id"), int)
-            and isinstance(plan.get("selling_price"), (int, float))
-            and not isinstance(plan.get("selling_price"), bool)
-            and plan["selling_price"] > 0
-            and isinstance(plan.get("provider_cost"), (int, float))
-            and not isinstance(plan.get("provider_cost"), bool)
-            and plan["provider_cost"] > 0
-            and plan["selling_price"] >= plan["provider_cost"]
-        )
-    ]
-
-    return {
-        "network": network_key,
-        "network_id": RIDAMSUB_NETWORKS[network_key],
-        "plans": customer_plans,
-    }
-
-def execute_ridamsub_purchase(
-    db: Session,
-    user_id: int,
-    network: str,
-    phone: str,
-    local_amount: Decimal,
-    plan_id: int | None = None,
-    amount: Decimal | None = None,
-    airtime_type: str = "VTU",
-):
-    """
-    Execute a Ridamsub request with a local transaction record.
-
-    - Creates and commits a unique local reference before the API request.
-    - Sends only documented Ridamsub purchase fields.
-    - Marks a transaction successful only after explicit provider success.
-    - Leaves uncertain outcomes pending for reconciliation.
-    - Does not debit/refund the customer wallet.
-    - Does not retry or activate any purchase route.
-    """
-
-    import logging
-
-    logger = logging.getLogger(__name__)
-
-    # Validate local configuration before creating a transaction.
-    if not RIDAMSUB_API_KEY:
-        raise HTTPException(
-            status_code=503,
-            detail="Ridamsub provider is not configured.",
-        )
-
-    network_key = network.strip().lower()
-
-    if network_key not in RIDAMSUB_NETWORKS:
-        raise HTTPException(
-            status_code=400,
             detail="Unsupported network.",
+
         )
 
-    if (
-        not phone
-        or len(phone) != 11
-        or not phone.isdigit()
-        or not phone.startswith("0")
-    ):
-        raise HTTPException(
-            status_code=400,
-            detail="A valid 11-digit Nigerian phone number is required.",
-        )
 
-    if local_amount <= 0:
-        raise HTTPException(
-            status_code=400,
-            detail="A valid local transaction amount is required.",
-        )
 
-    if plan_id is not None:
+    customer_plans = []
+
+
+
+    for plan in RIDAMSUB_DATA_PLANS.get(network_key, []):
+
+        plan_id = plan.get("plan_id")
+
+        provider_cost = plan.get("provider_cost")
+
+        selling_price = plan.get("selling_price")
+
+
+
+        if plan.get("available") is not True:
+
+            continue
+
+
+
         if (
+
             not isinstance(plan_id, int)
+
             or isinstance(plan_id, bool)
+
             or plan_id <= 0
+
         ):
-            raise HTTPException(
-                status_code=400,
-                detail="Invalid data plan ID.",
-            )
 
-        payload = {
-            "network": RIDAMSUB_NETWORKS[network_key],
-            "mobile_number": phone,
-            "Ported_number": True,
-            "plan": plan_id,
-        }
-        endpoint = f"{RIDAMSUB_BASE_URL}/api/data/"
-        transaction_type = "data_purchase"
+            continue
 
-    else:
-        if amount is None or amount <= 0:
-            raise HTTPException(
-                status_code=400,
-                detail="A valid airtime amount is required.",
-            )
 
-        if airtime_type not in {"VTU", "Share and Sell"}:
-            raise HTTPException(
-                status_code=400,
-                detail="Unsupported airtime type.",
-            )
 
-        payload = {
-            "network": RIDAMSUB_NETWORKS[network_key],
-            "mobile_number": phone,
-            "Ported_number": True,
-            "amount": float(amount),
-            "airtime_type": airtime_type,
-        }
-        endpoint = f"{RIDAMSUB_BASE_URL}/api/topup/"
-        transaction_type = "airtime_purchase"
+        if (
 
-    # Step 1: Save a unique local transaction before contacting the provider.
-    local_reference = secrets.token_urlsafe(24)
+            not isinstance(provider_cost, (int, float))
 
-    transaction = WalletTransaction(
-        user_id=user_id,
-        transaction_type=transaction_type,
-        amount=local_amount,
-        status="pending",
-        reference=local_reference,
-        gateway="ridamsub",
-    )
+            or isinstance(provider_cost, bool)
 
-    try:
-        db.add(transaction)
-        db.commit()
-        db.refresh(transaction)
-    except Exception:
-        db.rollback()
-        logger.exception("Could not save local Ridamsub transaction.")
-        raise HTTPException(
-            status_code=500,
-            detail="Could not create the local transaction record.",
-        )
+            or provider_cost <= 0
 
-    # Step 2: Send the standard provider payload once.
-    try:
-        response = httpx.post(
-            endpoint,
-            headers={
-                "Authorization": f"Token {RIDAMSUB_API_KEY}",
-                "Content-Type": "application/json",
-            },
-            json=payload,
-            timeout=20.0,
-        )
+        ):
 
-    except httpx.RequestError:
-        # The provider may have processed the purchase even though the
-        # response was not received. Never retry automatically.
-        logger.exception(
-            "Ridamsub outcome uncertain; local_reference=%s",
-            local_reference,
-        )
-        raise HTTPException(
-            status_code=504,
-            detail={
-                "message": (
-                    "Ridamsub's response was not received. "
-                    "The transaction remains pending reconciliation. "
-                    "Do not retry this purchase yet."
-                ),
-                "reference": local_reference,
-                "status": "pending",
-            },
-        )
+            continue
 
-    # Step 3: Parse the response without assuming malformed content is success.
-    try:
-        result = response.json()
-    except ValueError:
-        result = None
 
-    if response.status_code >= 500:
-        logger.warning(
-            "Ridamsub server error; local_reference=%s status_code=%s",
-            local_reference,
-            response.status_code,
-        )
-        raise HTTPException(
-            status_code=502,
-            detail={
-                "message": (
-                    "Ridamsub returned a server error. "
-                    "The transaction remains pending reconciliation."
-                ),
-                "reference": local_reference,
-                "status": "pending",
-            },
-        )
 
-    if response.status_code >= 400:
-        # Do not assume the provider did not vend unless its documented
-        # response semantics establish that the request was rejected.
-        logger.warning(
-            "Ridamsub returned an HTTP error; local_reference=%s "
-            "status_code=%s response=%r",
-            local_reference,
-            response.status_code,
-            result,
-        )
-        raise HTTPException(
-            status_code=502,
-            detail={
-                "message": (
-                    "Ridamsub returned an error. Check the provider "
-                    "transaction log before retrying or refunding."
-                ),
-                "reference": local_reference,
-                "status": "pending",
-            },
-        )
+        if (
 
-    if (
-        not isinstance(result, dict)
-        or result.get("Status") != "successful"
-        or result.get("id") is None
-    ):
-        logger.warning(
-            "Ridamsub did not confirm success; local_reference=%s",
-            local_reference,
-        )
-        raise HTTPException(
-            status_code=502,
-            detail={
-                "message": (
-                    "Ridamsub did not confirm a successful transaction. "
-                    "The transaction remains pending reconciliation."
-                ),
-                "reference": local_reference,
-                "status": "pending",
-            },
-        )
+            not isinstance(selling_price, (int, float))
 
-    # Step 4: Explicit success received. Preserve our local reference and
-    # record the provider ID in application logs for reconciliation.
-    provider_transaction_id = str(result["id"])
+            or isinstance(selling_price, bool)
 
-    transaction.status = "success"
+            or selling_price <= 0
 
-    try:
-        db.commit()
-    except Exception:
-        db.rollback()
-        logger.exception(
-            "Provider reported success but local status update failed; "
-            "local_reference=%s provider_transaction_id=%s",
-            local_reference,
-            provider_transaction_id,
-        )
-        raise HTTPException(
-            status_code=500,
-            detail={
-                "message": (
-                    "Ridamsub reported success, but the local transaction "
-                    "status could not be updated. Reconcile before retrying."
-                ),
-                "reference": local_reference,
-                "status": "pending",
-            },
-        )
+            or selling_price < provider_cost
 
-    logger.info(
-        "Ridamsub purchase confirmed; local_reference=%s "
-        "provider_transaction_id=%s",
-        local_reference,
-        provider_transaction_id,
-    )
+        ):
+
+            continue
+
+
+
+        customer_plans.append({
+
+            "variation_code": str(plan_id),
+
+            "plan_id": plan_id,
+
+            "name": plan["name"],
+
+            "price": selling_price,
+
+            "validity": plan.get("validity", "Not specified"),
+
+        })
+
+
 
     return {
-        "status": "success",
-        "reference": local_reference,
-        "provider_transaction_id": provider_transaction_id,
-        "transaction_id": transaction.id,
+
+        "network": network_key,
+
+        "network_id": RIDAMSUB_NETWORKS[network_key],
+
+        "plans": customer_plans,
+
     }
 
+
+
+
+
+
+
 # =========================
+
 # PYDANTIC SCHEMAS
+
 # =========================
+
+
 
 class UserCreate(BaseModel):
+
     name: str = Field(min_length=2, max_length=100)
+
     phone: str = Field(min_length=10, max_length=20)
+
     email: EmailStr
+
     password: str = Field(min_length=8, max_length=128)
 
 
+
+
+
 class ProfileUpdateRequest(BaseModel):
+
     name: str = Field(min_length=2, max_length=100)
+
     email: EmailStr
+
     phone: str = Field(min_length=10, max_length=20)
 
 
+
+
+
 class LoginRequest(BaseModel):
+
     phone: str = Field(
+
         min_length=10,
+
         max_length=20
+
     )
+
     password: str = Field(
+
         min_length=8,
+
         max_length=128
+
     )
+
+
+
+
 
 
 
 class AdminLoginRequest(BaseModel):
+
     username: str = Field(
+
         min_length=3,
+
         max_length=100
+
     )
 
-    password: str = Field(
-        min_length=8,
-        max_length=128
-    )
+
 
     password: str = Field(
+
         min_length=8,
+
         max_length=128
+
     )
+
+
+
+    password: str = Field(
+
+        min_length=8,
+
+        max_length=128
+
+    )
+
+
 
 class ForgotPasswordRequest(BaseModel):
+
     phone: str = Field(
+
         min_length=10,
+
         max_length=20
+
     )
+
+
 
 class AdminProfileUpdateRequest(BaseModel):
+
     username: str = Field(min_length=3, max_length=100)
+
     email: EmailStr | None = None
 
+
+
 class ResetPasswordRequest(BaseModel):
+
     phone: str = Field(
+
         min_length=10,
+
         max_length=20
+
     )
+
+
 
     reset_token: str = Field(
+
         min_length=20,
+
         max_length=200
+
     )
+
+
 
     new_password: str = Field(
+
         min_length=8,
+
         max_length=128
+
     )
+
 from decimal import Decimal
 
+
+
 class FundWalletRequest(BaseModel):
+
     amount: Decimal = Field(gt=0, le=1000000)
+
+
+
 
 
 from typing import Literal
 
+
+
 class AirtimePurchaseRequest(BaseModel):
+
     network: Literal["MTN", "Airtel", "Glo", "9mobile"]
+
     phone: str = Field(pattern=r"^0\d{10}$")
+
     amount: Decimal = Field(ge=50, le=100000)
 
+
+
 class DataPurchaseRequest(BaseModel):
+
     network: Literal["MTN", "Airtel", "Glo", "9mobile"]
+
     phone: str = Field(pattern=r"^0\d{10}$")
+
     variation_code: str = Field(min_length=1, max_length=100)
 
 
 
+
+
+
+
 # =========================
+
 # PASSWORD SECURITY
+
 # =========================
+
+
 
 password_hash = PasswordHash.recommended()
 
 
+
+
+
 # =========================
+
 # JWT TOKEN CREATION
+
 # =========================
+
+
 
 def create_access_token(user_id: int):
 
+
+
     expire = datetime.now(timezone.utc) + timedelta(
+
         minutes=JWT_EXPIRE_MINUTES
+
     )
+
+
 
     payload = {
+
         "sub": str(user_id),
+
         "exp": expire
+
     }
 
+
+
     token = jwt.encode(
+
         payload,
+
         JWT_SECRET_KEY,
+
         algorithm=JWT_ALGORITHM
+
     )
+
+
 
     return token
 
 
+
+
+
 def generate_reset_token():
+
     return secrets.token_urlsafe(32)
 
 
+
+
+
 def create_admin_access_token(admin_id: int):
+
     expire = datetime.now(timezone.utc) + timedelta(
+
         minutes=JWT_EXPIRE_MINUTES
+
     )
+
+
 
     payload = {
+
         "sub": str(admin_id),
+
         "role": "admin",
+
         "exp": expire
+
     }
 
+
+
     return jwt.encode(
+
         payload,
+
         JWT_SECRET_KEY,
+
         algorithm=JWT_ALGORITHM
+
     )
 
 
+
+
+
 # =========================
+
 # HTTP BEARER SECURITY
+
 # =========================
+
+
 
 security = HTTPBearer()
 
 
-# =========================
-# GET CURRENT AUTHENTICATED USER
+
+
+
 # =========================
 
+# GET CURRENT AUTHENTICATED USER
+
+# =========================
+
+
+
 def get_current_user(
+
     credentials: HTTPAuthorizationCredentials = Depends(security),
+
     db: Session = Depends(get_db)
+
 ):
+
+
 
     token = credentials.credentials
 
+
+
     try:
 
+
+
         payload = jwt.decode(
+
             token,
+
             JWT_SECRET_KEY,
+
             algorithms=[JWT_ALGORITHM]
+
         )
+
+
 
         user_id = payload.get("sub")
 
+
+
         if user_id is None:
 
+
+
             raise HTTPException(
+
                 status_code=401,
+
                 detail="Invalid authentication token"
+
             )
+
+
 
     except jwt.ExpiredSignatureError:
 
+
+
         raise HTTPException(
+
             status_code=401,
+
             detail="Authentication token has expired"
+
         )
+
+
 
     except jwt.InvalidTokenError:
 
+
+
         raise HTTPException(
+
             status_code=401,
+
             detail="Invalid authentication token"
+
         )
+
+
 
     try:
 
+
+
         user_id = int(user_id)
+
+
 
     except (TypeError, ValueError):
 
+
+
         raise HTTPException(
+
             status_code=401,
+
             detail="Invalid authentication token"
+
         )
 
+
+
     user = db.query(User).filter(
+
         User.id == user_id
+
     ).first()
+
+
 
     if not user:
 
+
+
         raise HTTPException(
+
             status_code=401,
+
             detail="User not found"
+
         )
+
+
 
     return user
 
 
+
+
+
+# ============================================================
+
+# VERIFICATION ENDPOINTS
+
+# ============================================================
+
+
+
+@app.post("/airtime/verify/{reference}")
+
+async def verify_airtime_purchase(
+
+    reference: str,
+
+    background_tasks: BackgroundTasks,
+
+    current_user: User = Depends(get_current_user),
+
+    db: Session = Depends(get_db),
+
+):
+
+    tx = (
+
+        db.query(WalletTransaction)
+
+        .filter(
+
+            WalletTransaction.reference == reference,
+
+            WalletTransaction.user_id == current_user.id,
+
+            WalletTransaction.gateway == "ridamsub",
+
+            WalletTransaction.transaction_type == "airtime_purchase",
+
+        )
+
+        .first()
+
+    )
+
+
+
+    if tx is None:
+
+        raise HTTPException(status_code=404, detail="Transaction not found.")
+
+
+
+    if tx.status in {"success", "failed"}:
+
+        return {"reference": reference, "status": tx.status}
+
+
+
+    result = await reconcile_pending_transaction(
+
+        reference, "airtime", current_user.id
+
+    )
+
+
+
+    if result.get("status") == PENDING_REQUERY:
+
+        background_tasks.add_task(
+
+            background_reconcile, reference, "airtime"
+
+        )
+
+
+
+    return {"reference": reference, **result}
+
+
+
+@app.post("/data/verify/{reference}")
+
+async def verify_data_purchase(
+
+    reference: str,
+
+    background_tasks: BackgroundTasks,
+
+    current_user: User = Depends(get_current_user),
+
+    db: Session = Depends(get_db),
+
+):
+
+    tx = (
+
+        db.query(WalletTransaction)
+
+        .filter(
+
+            WalletTransaction.reference == reference,
+
+            WalletTransaction.user_id == current_user.id,
+
+            WalletTransaction.gateway == "ridamsub",
+
+            WalletTransaction.transaction_type == "data_purchase",
+
+        )
+
+        .first()
+
+    )
+
+
+
+    if tx is None:
+
+        raise HTTPException(status_code=404, detail="Transaction not found.")
+
+
+
+    if tx.status in {"success", "failed"}:
+
+        return {"reference": reference, "status": tx.status}
+
+
+
+    result = await reconcile_pending_transaction(
+
+        reference, "data", current_user.id
+
+    )
+
+
+
+    if result.get("status") == PENDING_REQUERY:
+
+        background_tasks.add_task(
+
+            background_reconcile, reference, "data"
+
+        )
+
+
+
+    return {"reference": reference, **result}
+
+
+
+
+
+
+
 # =========================
+
 # GET CURRENT ADMIN
+
 # =========================
+
+
 
 def get_current_admin(
+
     credentials: HTTPAuthorizationCredentials = Depends(security),
+
     db: Session = Depends(get_db)
+
 ):
+
     token = credentials.credentials
 
+
+
     try:
+
         payload = jwt.decode(
+
             token,
+
             JWT_SECRET_KEY,
+
             algorithms=[JWT_ALGORITHM]
+
         )
+
+
 
         admin_id = payload.get("sub")
 
+
+
         if payload.get("role") != "admin" or admin_id is None:
+
             raise HTTPException(
+
                 status_code=401,
+
                 detail="Admin authentication required."
+
             )
+
+
 
         admin_id = int(admin_id)
 
+
+
     except HTTPException:
+
         raise
 
+
+
     except (jwt.InvalidTokenError, TypeError, ValueError):
+
         raise HTTPException(
+
             status_code=401,
+
             detail="Invalid or expired admin token."
+
         )
+
+
 
     admin = db.query(Admin).filter(
+
         Admin.id == admin_id,
+
         Admin.is_active.is_(True)
+
     ).first()
 
+
+
     if not admin:
+
         raise HTTPException(
+
             status_code=401,
+
             detail="Admin account not found or inactive."
+
         )
+
+
 
     return admin
 
 
 
+
+
+
+
 # =========================
+
 # HOME
+
 # =========================
+
+
 
 @app.get("/")
+
 def home():
+
     return RedirectResponse(url="/app", status_code=302)
 
+
+
 # =========================
+
 # CREATE USER
+
 # =========================
+
+
 
 @app.post("/user")
+
 def create_user(
+
     user_data: UserCreate,
+
     db: Session = Depends(get_db)
+
 ):
 
+
+
     existing_user = db.query(User).filter(
+
         User.phone == user_data.phone
+
     ).first()
+
+
 
     if existing_user:
 
+
+
         raise HTTPException(
+
             status_code=400,
+
             detail="Phone number already registered"
+
         )
 
+
+
     hashed_password = password_hash.hash(
+
         user_data.password
+
     )
+
+
 
     new_user = User(
+
         name=user_data.name,
+
         phone=user_data.phone,
+
         email=user_data.email,
+
         password_hash=hashed_password
+
     )
 
+
+
     db.add(new_user)
+
     db.commit()
+
     db.refresh(new_user)
 
+
+
     return {
+
         "message": "User created successfully",
+
         "id": new_user.id,
+
         "name": new_user.name,
+
         "phone": new_user.phone,
+
         "email": new_user.email,
+
         "created_at": new_user.created_at
+
     }
 
+
+
 # =========================
+
 # LOGIN
+
 # =========================
+
+
 
 @app.post("/login")
+
 def login(
+
     login_data: LoginRequest,
+
     db: Session = Depends(get_db)
+
 ):
 
+
+
     user = db.query(User).filter(
+
         User.phone == login_data.phone
+
     ).first()
+
+
 
     if not user or not user.password_hash:
 
+
+
         raise HTTPException(
+
             status_code=401,
+
             detail="Invalid phone number or password"
+
         )
 
+
+
     password_is_correct = password_hash.verify(
+
         login_data.password,
+
         user.password_hash
+
     )
+
+
 
     if not password_is_correct:
 
+
+
         raise HTTPException(
+
             status_code=401,
+
             detail="Invalid phone number or password"
+
         )
 
+
+
     access_token = create_access_token(
+
         user.id
+
     )
 
+
+
     return {
+
         "message": "Login successful",
+
         "access_token": access_token,
+
         "token_type": "bearer",
+
         "id": user.id,
+
         "name": user.name,
+
         "phone": user.phone
+
     }
 
 
+
+
+
 # =========================
+
 # ADMIN LOGIN
+
 # =========================
+
+
 
 @app.post("/admin/login")
+
 def admin_login(
+
     login_data: AdminLoginRequest,
+
     db: Session = Depends(get_db)
+
 ):
+
     admin = db.query(Admin).filter(
+
         Admin.username == login_data.username
+
     ).first()
 
+
+
     if not admin or not admin.is_active:
+
         raise HTTPException(
+
             status_code=401,
+
             detail="Invalid username or password."
+
         )
+
+
 
     password_is_correct = password_hash.verify(
+
         login_data.password,
+
         admin.password_hash
+
     )
 
+
+
     if not password_is_correct:
+
         raise HTTPException(
+
             status_code=401,
+
             detail="Invalid username or password."
+
         )
+
+
 
     access_token = create_admin_access_token(admin.id)
 
 
 
+
+
+
+
     try:
+
         db.add(
+
             AdminAuditLog(
+
                 admin_id=admin.id,
+
                 action="admin_login",
+
                 reason="Admin logged in successfully."
+
             )
+
         )
+
         db.commit()
+
     except Exception as e:
+
         db.rollback()
+
         print("ADMIN LOGIN AUDIT ERROR:", repr(e))
+
         # Allow login to succeed even if audit logging fails.
+
         pass
 
 
+
+
+
     return {
+
         "message": "Admin login successful.",
+
         "access_token": access_token,
+
         "token_type": "bearer",
+
         "admin": {
+
             "id": admin.id,
+
             "username": admin.username
+
         }
+
     }
+
+
+
+
 
 
 
 @app.get("/admin/wallet")
+
 def get_admin_wallet(
+
     current_admin: Admin = Depends(get_current_admin)
+
 ):
+
     return {
+
         "admin_id": current_admin.id,
+
         "admin_username": current_admin.username,
+
         "balance": float(current_admin.wallet_balance)
+
     }
+
+
+
 
 
 @app.post("/admin/wallet/fund")
+
 def initialize_admin_wallet_funding(
+
     request: FundWalletRequest,
+
     current_admin: Admin = Depends(get_current_admin),
+
     db: Session = Depends(get_db)
+
 ):
+
     if not PAYSTACK_SECRET_KEY:
+
         raise HTTPException(
+
             status_code=503,
+
             detail="Payment service is not configured."
+
         )
 
+
+
     if not current_admin.email or not current_admin.email.strip():
+
         raise HTTPException(
+
             status_code=400,
+
             detail="Please add an email address to your admin profile."
+
         )
+
+
 
     amount = Decimal(str(request.amount))
 
+
+
     if amount != amount.quantize(Decimal("0.01")):
+
         raise HTTPException(
+
             status_code=400,
+
             detail="Amount must have no more than two decimal places."
+
         )
+
+
 
     reference = secrets.token_urlsafe(24)
 
+
+
     transaction = WalletTransaction(
+
         user_id=None,
+
         admin_id=current_admin.id,
+
         transaction_type="funding",
+
         amount=amount,
+
         status="pending",
+
         reference=reference,
+
         gateway="paystack"
+
     )
+
+
 
     audit_log = AdminAuditLog(
+
         admin_id=current_admin.id,
+
         user_id=None,
+
         action="admin_wallet_funding_initialized",
+
         amount=amount,
+
         reason="Admin wallet funding initiated through Paystack",
+
         reference=reference
+
     )
 
+
+
     try:
+
         db.add(transaction)
+
         db.add(audit_log)
+
         db.commit()
+
         db.refresh(transaction)
+
     except Exception:
+
         db.rollback()
+
         raise HTTPException(
+
             status_code=500,
+
             detail="Unable to create the admin funding transaction."
+
         )
+
+
 
     payload = {
+
         "email": current_admin.email.strip(),
+
         "amount": int(amount * Decimal("100")),
+
         "reference": reference,
+
          "callback_url": (
+
         "https://omotech-airtime-data.onrender.com/payment-success?flow=admin"
+
     ),
+
         "metadata": {
+
             "owner_type": "admin",
+
             "admin_id": current_admin.id,
+
             "transaction_id": transaction.id
+
         }
+
     }
+
+
 
     try:
+
         response = requests.post(
+
             f"{PAYSTACK_BASE_URL}/transaction/initialize",
+
             json=payload,
+
             headers={
+
                 "Authorization": f"Bearer {PAYSTACK_SECRET_KEY}",
+
                 "Content-Type": "application/json"
+
             },
+
             timeout=15
+
         )
+
         response.raise_for_status()
+
         result = response.json()
 
+
+
     except (requests.RequestException, ValueError):
+
         # Keep the transaction pending if the outcome is uncertain.
+
         raise HTTPException(
+
             status_code=502,
+
             detail=(
+
                 "Unable to confirm payment initialization. "
+
                 "Check the transaction history before retrying."
+
             )
+
         )
+
+
 
     if not result.get("status"):
+
         transaction.status = "failed"
+
         try:
+
             db.commit()
+
         except Exception:
+
             db.rollback()
 
+
+
         raise HTTPException(
+
             status_code=502,
+
             detail="Paystack could not initialize the payment."
+
         )
+
+
 
     authorization_url = (
+
         (result.get("data") or {}).get("authorization_url")
+
     )
 
+
+
     if not authorization_url:
+
         raise HTTPException(
+
             status_code=502,
+
             detail="Paystack did not return a payment URL."
+
         )
 
+
+
     return {
+
         "message": "Admin wallet funding initialized.",
+
         "status": "pending",
+
         "reference": reference,
+
         "amount": float(amount),
+
         "authorization_url": authorization_url
+
     }
 
 
 
 
+
+
+
+
+
 # =========================
+
 # ADMIN PROFILE MANAGEMENT
+
 # =========================
+
+
 
 @app.get("/admin/profile")
+
 def get_admin_profile(
+
     current_admin: Admin = Depends(get_current_admin)
+
 ):
+
     return {
+
         "id": current_admin.id,
+
         "username": current_admin.username,
+
         "email": current_admin.email,
+
         "is_active": current_admin.is_active,
+
         "created_at": current_admin.created_at
+
     }
+
+
+
+
 
 
 
 @app.put("/admin/profile")
+
 def update_admin_profile(
+
     request: AdminProfileUpdateRequest,
+
     current_admin: Admin = Depends(get_current_admin),
+
     db: Session = Depends(get_db)
+
 ):
+
     new_username = request.username.strip()
 
+
+
     existing_admin = db.query(Admin).filter(
+
         Admin.username == new_username,
+
         Admin.id != current_admin.id
+
     ).first()
 
+
+
     if existing_admin:
+
         raise HTTPException(
+
             status_code=409,
+
             detail="This username is already in use."
+
         )
 
+
+
     current_admin.username = new_username
+
     current_admin.email = (
+
         str(request.email).strip().lower()
+
         if request.email is not None
+
         else None
+
     )
 
 
+
+
+
     db.commit()
+
     db.refresh(current_admin)
 
 
+
+
+
     try:
+
         db.add(
+
             AdminAuditLog(
+
                 admin_id=current_admin.id,
+
                 action="admin_profile_updated",
+
                 reason="Admin updated their profile."
+
             )
+
         )
+
         db.commit()
+
     except Exception:
+
         db.rollback()
 
 
+
+
+
     return {
+
         "message": "Admin profile updated successfully.",
+
         "admin": {
+
             "id": current_admin.id,
+
             "username": current_admin.username,
+
             "email": current_admin.email,
+
             "is_active": current_admin.is_active,
+
             "created_at": current_admin.created_at
+
         }
+
     }
 
 
 
+
+
+
+
 # =========================
+
 # FORGOT PASSWORD
+
 # =========================
+
+
 
 @app.post("/forgot-password")
+
 def forgot_password(
+
     request: ForgotPasswordRequest,
+
     db: Session = Depends(get_db)
+
 ):
 
+
+
     user = db.query(User).filter(
+
         User.phone == request.phone
+
     ).first()
+
+
 
     if not user:
 
+
+
         raise HTTPException(
+
             status_code=404,
+
             detail="User not found"
+
         )
+
+
 
     reset_token = generate_reset_token()
 
+
+
     token_hash = hashlib.sha256(
+
         reset_token.encode()
+
     ).hexdigest()
+
+
 
     expires_at = datetime.now(timezone.utc) + timedelta(
+
         minutes=15
+
     )
+
+
 
     reset_record = PasswordResetToken(
+
         user_id=user.id,
+
         token_hash=token_hash,
+
         expires_at=expires_at
+
     )
 
+
+
     db.add(reset_record)
+
     db.commit()
 
+
+
     return {
+
         "message": "Password reset token generated",
+
         "reset_token": reset_token,
+
         "expires_in_minutes": 15
+
     }
+
 # =========================
+
 # RESET PASSWORD
+
 # =========================
+
+
 
 @app.post("/reset-password")
+
 def reset_password(
+
     request: ResetPasswordRequest,
+
     db: Session = Depends(get_db)
+
 ):
 
+
+
     token_hash = hashlib.sha256(
+
         request.reset_token.encode()
+
     ).hexdigest()
 
+
+
     reset_record = db.query(
+
         PasswordResetToken
+
     ).filter(
+
         PasswordResetToken.token_hash == token_hash,
+
         PasswordResetToken.used == False
+
     ).order_by(
+
         PasswordResetToken.created_at.desc()
+
     ).first()
+
+
 
     if not reset_record:
 
+
+
         raise HTTPException(
+
             status_code=400,
+
             detail="Invalid or already used reset token"
+
         )
 
+
+
     current_time = datetime.now(timezone.utc).replace(
+
         tzinfo=None
+
     )
+
+
 
     if reset_record.expires_at < current_time:
 
+
+
         raise HTTPException(
+
             status_code=400,
+
             detail="Reset token has expired"
+
         )
 
+
+
     user = db.query(User).filter(
+
         User.id == reset_record.user_id,
+
         User.phone == request.phone
+
     ).first()
+
+
 
     if not user:
 
+
+
         raise HTTPException(
+
             status_code=400,
+
             detail="Invalid password reset request"
+
         )
 
+
+
     user.password_hash = password_hash.hash(
+
         request.new_password
+
     )
+
+
 
     reset_record.used = True
 
+
+
     db.commit()
 
+
+
     return {
+
         "message": "Password reset successfully"
+
     }
 
 
-# =========================
-# GET ALL USERS
+
+
+
 # =========================
 
+# GET ALL USERS
+
+# =========================
+
+
+
 @app.get("/users")
+
 def get_users(
+
     db: Session = Depends(get_db)
+
 ):
+
+
 
     users = db.query(User).all()
 
+
+
     return [
+
         {
+
             "id": user.id,
+
             "name": user.name,
+
             "phone": user.phone,
+
             "created_at": user.created_at
+
         }
+
         for user in users
+
     ]
 
 
+
+
+
 # =========================
+
 # ADMIN USER MANAGEMENT
+
 # =========================
+
+
 
 @app.get("/admin/users")
+
 def admin_get_users(
+
     current_admin: Admin = Depends(get_current_admin),
+
     db: Session = Depends(get_db)
+
 ):
+
     users = db.query(User).order_by(User.id.asc()).all()
 
+
+
     return [
+
         {
+
             "id": user.id,
+
             "name": user.name,
+
             "email": user.email,
+
             "phone": user.phone,
+
             "wallet_balance": float(user.wallet_balance or 0),
+
             "created_at": user.created_at
+
         }
+
         for user in users
+
     ]
 
 
+
+
+
 # =========================
+
 # ADMIN TRANSACTION MANAGEMENT
+
 # =========================
+
+
 
 @app.get("/admin/transactions")
+
 def admin_get_transactions(
+
     current_admin: Admin = Depends(get_current_admin),
+
     db: Session = Depends(get_db)
+
 ):
+
     transactions = (
+
         db.query(WalletTransaction, User, Admin)
+
         .outerjoin(
+
             User,
+
             WalletTransaction.user_id == User.id
+
         )
+
         .outerjoin(
+
             Admin,
+
             WalletTransaction.admin_id == Admin.id
+
         )
+
         .order_by(
+
             WalletTransaction.created_at.desc(),
+
             WalletTransaction.id.desc()
+
         )
+
         .all()
+
     )
 
+
+
     return [
+
         {
+
             "transaction_id": transaction.id,
+
             "owner_type": (
+
                 "customer" if transaction.user_id is not None
+
                 else "admin" if transaction.admin_id is not None
+
                 else "unknown"
+
             ),
+
             "user_id": user.id if user else None,
+
             "user_name": user.name if user else None,
+
             "user_phone": user.phone if user else None,
+
             "user_email": user.email if user else None,
+
             "admin_id": admin.id if admin else None,
+
             "admin_username": admin.username if admin else None,
+
             "transaction_type": transaction.transaction_type,
+
             "amount": float(transaction.amount),
+
             "status": transaction.status,
+
             "reference": transaction.reference,
+
             "gateway": transaction.gateway,
+
             "created_at": transaction.created_at
+
         }
+
         for transaction, user, admin in transactions
+
     ]
+
+
+
 
 
 @app.get("/api/reconcile/{local_reference}")
+
 def inspect_ridamsub_reconciliation(
+
     local_reference: str,
+
     current_admin: Admin = Depends(get_current_admin),
+
     db: Session = Depends(get_db),
+
 ):
+
     """
+
     Inspect a local Ridamsub transaction for manual reconciliation.
 
+
+
     This endpoint does not contact Ridamsub, retry purchases,
+
     change transaction status, or issue refunds.
+
     """
 
+
+
     transaction = (
+
         db.query(WalletTransaction)
+
         .filter(
+
             WalletTransaction.reference == local_reference,
+
             WalletTransaction.gateway == "ridamsub",
+
         )
+
         .first()
+
     )
 
+
+
     if transaction is None:
+
         raise HTTPException(
+
             status_code=404,
+
             detail="Ridamsub transaction not found.",
+
         )
 
+
+
     return {
+
         "local_reference": transaction.reference,
+
         "transaction_id": transaction.id,
+
         "user_id": transaction.user_id,
+
         "transaction_type": transaction.transaction_type,
+
         "amount": str(transaction.amount),
+
         "status": transaction.status,
+
         "next_action": (
+
             "Verify the transaction in the Ridamsub provider panel "
+
             "or a confirmed provider transaction log. Do not retry "
+
             "or refund until the outcome is established."
+
             if transaction.status == "pending"
+
             else "Review the recorded transaction status."
+
         ),
+
     }
 
 
 
+
+
+
+
 # =========================
+
 # ADMIN AUDIT LOGS
+
 # =========================
+
+
 
 @app.get("/admin/audit-logs")
+
 def admin_get_audit_logs(
+
     limit: int = Query(default=50, ge=1, le=200),
+
     current_admin: Admin = Depends(get_current_admin),
+
     db: Session = Depends(get_db)
+
 ):
+
     logs = (
+
         db.query(AdminAuditLog)
+
         .order_by(
+
             AdminAuditLog.created_at.desc(),
+
             AdminAuditLog.id.desc()
+
         )
+
         .limit(limit)
+
         .all()
+
     )
 
+
+
     return [
+
         {
+
             "id": log.id,
+
             "action": log.action,
+
             "admin_id": log.admin_id,
+
             "reason": log.reason,
+
             "amount": (
+
                 float(log.amount)
+
                 if log.amount is not None
+
                 else None
+
             ),
+
             "reference": log.reference,
+
             "created_at": log.created_at
+
         }
+
         for log in logs
+
     ]
 
 
+
+
+
 # =========================
+
 # PROTECTED USER PROFILE
+
 # =========================
+
+
+
 
 
 @app.get("/me")
+
 def get_my_profile(
+
     current_user: User = Depends(get_current_user)
+
 ):
+
     return {
+
         "message": "Authenticated user",
+
         "id": current_user.id,
+
         "name": current_user.name,
+
         "email": current_user.email,
+
         "phone": current_user.phone,
+
         "created_at": current_user.created_at
+
     }
+
+
 
 @app.put("/profile")
+
 def update_profile(
+
     request: ProfileUpdateRequest,
+
     current_user: User = Depends(get_current_user),
+
     db: Session = Depends(get_db)
+
 ):
+
     existing_phone = db.query(User).filter(
+
         User.phone == request.phone,
+
         User.id != current_user.id
+
     ).first()
 
+
+
     if existing_phone:
+
         raise HTTPException(
+
             status_code=409,
+
             detail="This phone number is already in use."
+
         )
 
+
+
     current_user.name = request.name.strip()
+
     current_user.email = str(request.email).strip().lower()
+
     current_user.phone = request.phone.strip()
 
+
+
     db.commit()
+
     db.refresh(current_user)
 
+
+
     return {
+
         "message": "Profile updated successfully.",
+
         "user": {
+
             "id": current_user.id,
+
             "name": current_user.name,
+
             "email": current_user.email,
+
             "phone": current_user.phone
+
         }
+
     }
+
+
+
 
 
 @app.get("/wallet")
+
 def get_wallet(
+
     current_user: User = Depends(get_current_user)
+
 ):
+
     return {
+
         "user_id": current_user.id,
+
         "balance": float(current_user.wallet_balance)
+
     }
 
+
+
 # =========================
+
 # APPROVED DATA PLAN CATALOGUE
+
 # =========================
+
+
 
 APPROVED_DATA_PLANS = {
+
     "mtn": {
+
         "mtn-50mb-200": {
+
             "name": "MTN 200MB — 2 days",
+
             "selling_price": 230,
+
         },
+
         "mtn-2-5gb-600": {
+
             "name": "MTN 2.5GB — 2 days",
+
             "selling_price": 680,
+
         },
+
         "mtn-3gb-1500": {
+
             "name": "MTN 3GB — 30 days",
+
             "selling_price": 1600,
+
         },
+
         "mtn-3gb-2500": {
+
             "name": "MTN 6GB — 30 days",
+
             "selling_price": 2750,
+
         },
+
         "mtn-data-3000": {
+
             "name": "MTN 8GB — 30 days",
+
             "selling_price": 3310,
+
         },
+
         "mtn-1gb-3500": {
+
             "name": "MTN 10GB — 30 days",
+
             "selling_price": 3740,
+
         },
+
         "mtn-100hr-5000": {
+
             "name": "MTN 15GB — 30 days",
+
             "selling_price": 5250,
+
         },
+
         "mtn-3gb-6000": {
+
             "name": "MTN 20GB — 30 days",
+
             "selling_price": 6300,
+
         },
+
         "mtn-40gb-10000": {
+
             "name": "MTN 40GB — 30 days",
+
             "selling_price": 10500,
+
         },
+
     }
+
 }
 
 
+
+
+
 @app.get("/data/plans/{network}")
+
 def get_data_plans(network: str):
-    raise HTTPException(
-        status_code=503,
-        detail="Data plans are temporarily unavailable while the new provider is being integrated.",
-    )
+
+    return get_ridamsub_data_plans(network)
+
+
+
+
+
+def validate_idempotency_key(value: str | None) -> str:
+
+    """Validate and normalize an incoming Idempotency-Key header."""
+
+    if not isinstance(value, str):
+
+        raise HTTPException(
+
+            status_code=400,
+
+            detail="An Idempotency-Key header is required.",
+
+        )
+
+
+
+    key = value.strip()
+
+
+
+    if not key or len(key) > 200:
+
+        raise HTTPException(
+
+            status_code=400,
+
+            detail="A valid Idempotency-Key is required.",
+
+        )
+
+
+
+    return key
+
+
+
+
 
 # =========================
-# DATA PURCHASE
-# TEMPORARILY DISABLED
+
+# DATA AND AIRTIME PURCHASE
+
 # =========================
+
+
 
 @app.post("/data/purchase")
-def purchase_data(
+
+async def purchase_data(
+
     request: DataPurchaseRequest,
+
     current_user: User = Depends(get_current_user),
+
     db: Session = Depends(get_db),
+
+    idempotency_key: str | None = Header(
+
+        default=None, alias="Idempotency-Key"
+
+    ),
+
+    background_tasks: BackgroundTasks = None,
+
 ):
-    raise HTTPException(
-        status_code=503,
-        detail="Data purchases are temporarily disabled while the new provider is being integrated.",
+
+    key = validate_idempotency_key(idempotency_key)
+
+
+
+    if not RIDAMSUB_PURCHASES_ENABLED:
+
+        raise HTTPException(
+
+            status_code=503,
+
+            detail="Data purchases are temporarily disabled."
+
+        )
+
+
+
+    try:
+
+        plan_id = int(request.variation_code)
+
+    except (TypeError, ValueError):
+
+        raise HTTPException(
+
+            status_code=400,
+
+            detail="Invalid data plan ID."
+
+        )
+
+
+
+    return await execute_ridamsub_purchase(
+
+        db=db,
+
+        user_id=current_user.id,
+
+        purchase_type="data",
+
+        network=request.network,
+
+        phone=request.phone,
+
+        plan_id=plan_id,
+
+        idempotency_key=key,
+
+        background_tasks=background_tasks,
+
     )
+
+
+
 
 
 @app.post("/airtime/purchase")
-def purchase_airtime(
+
+async def purchase_airtime(
+
     request: AirtimePurchaseRequest,
+
     current_user: User = Depends(get_current_user),
+
     db: Session = Depends(get_db),
+
+    idempotency_key: str | None = Header(
+
+        default=None, alias="Idempotency-Key"
+
+    ),
+
+    background_tasks: BackgroundTasks = None,
+
 ):
-    raise HTTPException(
-        status_code=503,
-        detail="Airtime purchases are temporarily disabled while the new provider is being integrated.",
+
+    key = validate_idempotency_key(idempotency_key)
+
+
+
+    if not RIDAMSUB_PURCHASES_ENABLED:
+
+        raise HTTPException(
+
+            status_code=503,
+
+            detail="Airtime purchases are temporarily disabled."
+
+        )
+
+
+
+    return await execute_ridamsub_purchase(
+
+        db=db,
+
+        user_id=current_user.id,
+
+        purchase_type="airtime",
+
+        network=request.network,
+
+        phone=request.phone,
+
+        amount=request.amount,
+
+        idempotency_key=key,
+
+        background_tasks=background_tasks,
+
     )
 
 
 
-@app.post("/airtime/verify/{reference}")
-def verify_airtime_purchase(
-    reference: str,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
-):
-    raise HTTPException(
-        status_code=503,
-        detail="Airtime transaction verification is temporarily disabled while the new provider is being integrated.",
-    )
 
 
 @app.post("/wallet/fund")
+
 def fund_wallet(
+
     request: FundWalletRequest,
+
     current_user: User = Depends(get_current_user),
+
     db: Session = Depends(get_db)
+
 ):
+
     if not PAYSTACK_SECRET_KEY:
+
         raise HTTPException(
+
             status_code=500,
+
             detail="Payment service is not configured."
+
         )
+
+
 
     reference = secrets.token_urlsafe(24)
+
     transaction = WalletTransaction(
+
         user_id=current_user.id,
+
         transaction_type="funding",
+
         amount=request.amount,
+
         status="pending",
+
         reference=reference,
+
         gateway="paystack"
+
     )
 
+
+
     db.add(transaction)
+
     db.commit()
+
     db.refresh(transaction)
 
+
+
     try:
+
         response = requests.post(
+
             "https://api.paystack.co/transaction/initialize",
+
             headers={
+
                 "Authorization": f"Bearer {PAYSTACK_SECRET_KEY}",
+
                 "Content-Type": "application/json"
+
             },
+
             json={
+
                 "email": current_user.email,
+
                 "amount": int(request.amount * 100),
+
                 "reference": reference,
+
                 "metadata": {
+
                     "user_id": current_user.id,
+
                     "transaction_id": transaction.id
+
                 }
+
             },
+
             timeout=30
+
         )
+
+
 
         result = response.json()
 
+
+
         if not response.ok or not result.get("status"):
+
             transaction.status = "failed"
+
             db.commit()
+
             raise HTTPException(
+
                 status_code=502,
+
                 detail="Unable to initialize Paystack payment."
+
             )
 
+
+
         return {
+
             "message": "Payment initialized successfully.",
+
             "transaction_id": transaction.id,
+
             "reference": reference,
+
             "status": "pending",
+
             "authorization_url": result["data"]["authorization_url"]
+
         }
 
+
+
     except requests.RequestException:
+
         transaction.status = "failed"
+
         db.commit()
+
         raise HTTPException(
+
             status_code=502,
+
             detail="Unable to connect to the payment service."
+
         )
+
+
+
 
 
 @app.post("/wallet/verify/{reference}")
+
 def verify_wallet_funding(
+
     reference: str,
+
     current_user: User = Depends(get_current_user),
+
     db: Session = Depends(get_db)
+
 ):
+
     try:
+
         # Lock the funding transaction to prevent duplicate credits.
+
         transaction = db.query(WalletTransaction).filter(
+
             WalletTransaction.reference == reference,
+
             WalletTransaction.user_id == current_user.id,
+
             WalletTransaction.transaction_type == "funding"
+
         ).with_for_update().first()
 
+
+
         if not transaction:
+
             db.rollback()
+
             raise HTTPException(
+
                 status_code=404,
+
                 detail="Funding transaction not found."
+
             )
+
+
+
 
 
         if transaction.gateway != "paystack":
+
             db.rollback()
+
             raise HTTPException(
+
                 status_code=400,
+
                 detail="This transaction does not belong to Paystack."
+
             )
 
+
+
         if transaction.status == "success":
+
             balance = db.query(User.wallet_balance).filter(
+
                 User.id == current_user.id
+
             ).scalar()
+
+
 
             db.commit()
 
+
+
             return {
+
                 "message": "Payment already verified.",
+
                 "status": "success",
+
                 "wallet_balance": float(balance)
+
             }
 
+
+
         if transaction.status != "pending":
+
             db.rollback()
+
             raise HTTPException(
+
                 status_code=400,
+
                 detail="This transaction cannot be verified."
+
             )
 
+
+
         # Verify the payment directly with Paystack.
+
         response = requests.get(
+
             f"https://api.paystack.co/transaction/verify/{reference}",
+
             headers={
+
                 "Authorization": f"Bearer {PAYSTACK_SECRET_KEY}"
+
             },
+
             timeout=30
+
         )
+
+
 
         result = response.json()
 
+
+
         if not response.ok or not result.get("status"):
+
             db.rollback()
+
             raise HTTPException(
+
                 status_code=502,
+
                 detail="Paystack verification request failed."
+
             )
+
+
 
         payment = result.get("data", {})
 
+
+
         if payment.get("status") != "success":
+
             db.rollback()
+
             raise HTTPException(
+
                 status_code=400,
+
                 detail="Paystack has not confirmed a successful payment."
+
             )
 
+
+
         if payment.get("reference") != transaction.reference:
+
             db.rollback()
+
             raise HTTPException(
+
                 status_code=400,
+
                 detail="Payment reference mismatch."
+
             )
+
+
 
         expected_kobo = int(transaction.amount * 100)
 
+
+
         if payment.get("amount") != expected_kobo:
+
             db.rollback()
+
             raise HTTPException(
+
                 status_code=400,
+
                 detail="Payment amount does not match."
+
             )
+
+
 
         if payment.get("currency") != "NGN":
+
             db.rollback()
+
             raise HTTPException(
+
                 status_code=400,
+
                 detail="Payment currency does not match."
+
             )
+
+
 
         # Lock the user's database row before updating the balance.
+
         user = db.query(User).filter(
+
             User.id == current_user.id
+
         ).with_for_update().first()
 
+
+
         if not user or not user.email:
+
             db.rollback()
+
             raise HTTPException(
+
                 status_code=400,
+
                 detail="A valid user email is required."
+
             )
+
+
 
         customer_email = (
+
             payment.get("customer", {}).get("email", "").strip().lower()
+
         )
+
+
 
         if customer_email != user.email.strip().lower():
+
             db.rollback()
+
             raise HTTPException(
+
                 status_code=400,
+
                 detail="Payment email does not match the user's email."
+
             )
 
+
+
         # Credit the wallet and mark the transaction in one commit.
+
         user.wallet_balance += transaction.amount
+
         transaction.status = "success"
 
+
+
         db.commit()
+
         db.refresh(user)
 
+
+
         return {
+
             "message": "Wallet funded successfully.",
+
             "status": "success",
+
             "amount": float(transaction.amount),
+
             "wallet_balance": float(user.wallet_balance)
+
         }
 
+
+
     except HTTPException:
+
         raise
+
     except requests.RequestException:
+
         db.rollback()
+
         raise HTTPException(
+
             status_code=502,
+
             detail="Unable to contact Paystack."
+
         )
+
     except Exception:
+
         db.rollback()
+
         raise HTTPException(
+
             status_code=500,
+
             detail="Wallet verification failed. Please retry."
+
         )
 
 
+
+
+
 # =========================
+
 # PAYSTACK WEBHOOK
+
 # =========================
+
 @app.post("/payments/paystack/webhook")
+
 @app.post("/paystack/webhook")
+
 async def paystack_webhook(
+
     request: Request,
+
     db: Session = Depends(get_db)
+
 ):
+
     if not PAYSTACK_SECRET_KEY:
+
         raise HTTPException(
+
             status_code=500,
+
             detail="Payment service is not configured."
+
         )
+
+
 
     # 1. Verify the signature using the original request body.
+
     body = await request.body()
+
     signature = request.headers.get("x-paystack-signature", "")
 
+
+
     expected_signature = hmac.new(
+
         PAYSTACK_SECRET_KEY.encode("utf-8"),
+
         body,
+
         hashlib.sha512
+
     ).hexdigest()
 
+
+
     if not signature or not hmac.compare_digest(
+
         signature, expected_signature
+
     ):
+
         raise HTTPException(
+
             status_code=401,
+
             detail="Invalid Paystack webhook signature."
+
         )
+
+
 
     # 2. Parse the webhook event.
+
     try:
+
         event_data = json.loads(body)
+
     except (json.JSONDecodeError, UnicodeDecodeError):
+
         raise HTTPException(
+
             status_code=400,
+
             detail="Invalid webhook payload."
+
         )
+
+
 
     if event_data.get("event") != "charge.success":
+
         return {"status": "received"}
 
+
+
     event_payment = event_data.get("data") or {}
+
     reference = event_payment.get("reference")
 
+
+
     if not reference:
+
         raise HTTPException(
+
             status_code=400,
+
             detail="Payment reference is missing."
+
         )
+
+
 
     # 3. Verify the transaction independently with Paystack.
+
     try:
+
         response = requests.get(
+
             f"{PAYSTACK_BASE_URL}/transaction/verify/{reference}",
+
             headers={
+
                 "Authorization": f"Bearer {PAYSTACK_SECRET_KEY}"
+
             },
+
             timeout=30
+
         )
+
         response.raise_for_status()
+
         result = response.json()
 
+
+
     except requests.Timeout:
+
         raise HTTPException(
+
             status_code=504,
+
             detail="Paystack verification timed out."
-        )
-    except requests.RequestException:
-        raise HTTPException(
-            status_code=502,
-            detail="Unable to contact Paystack."
-        )
-    except ValueError:
-        raise HTTPException(
-            status_code=502,
-            detail="Invalid response from Paystack."
+
         )
 
-    if not result.get("status"):
+    except requests.RequestException:
+
         raise HTTPException(
+
             status_code=502,
-            detail="Paystack could not verify the payment."
+
+            detail="Unable to contact Paystack."
+
         )
+
+    except ValueError:
+
+        raise HTTPException(
+
+            status_code=502,
+
+            detail="Invalid response from Paystack."
+
+        )
+
+
+
+    if not result.get("status"):
+
+        raise HTTPException(
+
+            status_code=502,
+
+            detail="Paystack could not verify the payment."
+
+        )
+
+
 
     payment = result.get("data") or {}
 
+
+
     if (
+
         payment.get("status") != "success"
+
         or payment.get("reference") != reference
+
         or event_payment.get("reference") != reference
+
     ):
+
         raise HTTPException(
+
             status_code=400,
+
             detail="Payment verification failed."
+
         )
+
+
 
     if payment.get("currency") != "NGN":
+
         raise HTTPException(
+
             status_code=400,
+
             detail="Payment currency does not match."
+
         )
+
+
 
     # 4. Find and lock the funding transaction.
+
     try:
+
         transaction = (
+
             db.query(WalletTransaction)
+
             .filter(
+
                 WalletTransaction.reference == reference,
+
                 WalletTransaction.transaction_type == "funding",
+
                 WalletTransaction.gateway == "paystack"
+
             )
+
             .with_for_update()
+
             .first()
+
         )
+
+
 
         if not transaction:
+
             raise HTTPException(
+
                 status_code=404,
+
                 detail="Funding transaction not found."
+
             )
+
+
 
         # A transaction must belong to exactly one account.
+
         is_customer_transaction = transaction.user_id is not None
+
         is_admin_transaction = transaction.admin_id is not None
 
+
+
         if is_customer_transaction == is_admin_transaction:
+
             raise HTTPException(
+
                 status_code=400,
+
                 detail="Transaction ownership is invalid."
+
             )
+
+
 
         # Ignore duplicate webhook deliveries.
+
         if transaction.status == "success":
+
             db.rollback()
+
             return {"status": "received"}
+
+
 
         if transaction.status != "pending":
+
             db.rollback()
+
             return {"status": "received"}
 
+
+
         # 5. Validate the amount against the pending transaction.
+
         expected_kobo = int(
+
             Decimal(str(transaction.amount)) * Decimal("100")
+
         )
 
+
+
         if payment.get("amount") != expected_kobo:
+
             raise HTTPException(
+
                 status_code=400,
+
                 detail="Payment amount does not match."
+
             )
+
+
 
         customer_email = (
+
             (payment.get("customer") or {}).get("email") or ""
+
         ).strip().lower()
 
+
+
         # 6. Credit the correct wallet.
+
         if is_customer_transaction:
+
             user = (
+
                 db.query(User)
+
                 .filter(User.id == transaction.user_id)
+
                 .with_for_update()
+
                 .first()
+
             )
 
+
+
             if not user or not user.email:
+
                 raise HTTPException(
+
                     status_code=400,
+
                     detail="Funding user or email not found."
+
                 )
 
+
+
             if customer_email != user.email.strip().lower():
+
                 raise HTTPException(
+
                     status_code=400,
+
                     detail="Payment email does not match."
+
                 )
+
+
 
             user.wallet_balance += transaction.amount
 
+
+
         else:
+
             admin = (
+
                 db.query(Admin)
+
                 .filter(Admin.id == transaction.admin_id)
+
                 .with_for_update()
+
                 .first()
+
             )
 
+
+
             if not admin or not admin.email:
+
                 raise HTTPException(
+
                     status_code=400,
+
                     detail="Funding admin or email not found."
+
                 )
 
+
+
             if customer_email != admin.email.strip().lower():
+
                 raise HTTPException(
+
                     status_code=400,
+
                     detail="Payment email does not match."
+
                 )
+
+
 
             admin.wallet_balance += transaction.amount
 
+
+
             db.add(
+
                 AdminAuditLog(
+
                     admin_id=admin.id,
+
                     user_id=None,
+
                     action="admin_wallet_funding_completed",
+
                     amount=transaction.amount,
+
                     reason="Paystack webhook verified admin funding",
+
                     reference=reference
+
                 )
+
             )
 
+
+
         # Commit wallet credit and transaction status together.
+
         transaction.status = "success"
+
         db.commit()
+
+
 
         return {"status": "received"}
 
+
+
     except HTTPException:
+
         db.rollback()
+
         raise
+
     except Exception:
+
         db.rollback()
+
         raise HTTPException(
+
             status_code=500,
+
             detail="Unable to process Paystack webhook."
+
         )
+
+
+
+
 
 
 
 @app.get("/transactions")
+
 def get_transactions(
+
     current_user: User = Depends(get_current_user),
+
     db: Session = Depends(get_db)
+
 ):
+
     transactions = (
+
         db.query(WalletTransaction)
+
         .filter(WalletTransaction.user_id == current_user.id)
+
         .order_by(WalletTransaction.id.desc())
+
         .all()
+
     )
 
+
+
     return {
+
         "user_id": current_user.id,
+
         "transactions": [
+
             {
+
                 "transaction_id": transaction.id,
+
                 "transaction_type": transaction.transaction_type,
+
                 "amount": float(transaction.amount),
+
                 "status": transaction.status,
+
                 "reference": transaction.reference,
+
                 "gateway": transaction.gateway
 
+
+
             }
+
             for transaction in transactions
+
         ]
+
     }
 
 
+
+
+
 # =========================
+
 # ADMIN DASHBOARD OVERVIEW
+
 # =========================
+
+
 
 @app.get("/admin/overview")
+
 def admin_overview(
+
     current_admin: Admin = Depends(get_current_admin),
+
     db: Session = Depends(get_db)
+
 ):
+
     total_users = db.query(func.count(User.id)).scalar() or 0
 
+
+
     total_admins = db.query(
+
         func.count(Admin.id)
+
     ).filter(
+
         Admin.is_active == True
+
     ).scalar() or 0
+
+
 
     total_transactions = db.query(
+
         func.count(WalletTransaction.id)
+
     ).filter(
+
         WalletTransaction.transaction_type == "funding"
+
     ).scalar() or 0
+
+
 
     successful_transactions = db.query(
+
         func.count(WalletTransaction.id)
+
     ).filter(
+
         WalletTransaction.transaction_type == "funding",
+
         WalletTransaction.status == "success"
+
     ).scalar() or 0
+
+
 
     pending_transactions = db.query(
+
         func.count(WalletTransaction.id)
+
     ).filter(
+
         WalletTransaction.transaction_type == "funding",
+
         WalletTransaction.status == "pending"
+
     ).scalar() or 0
 
+
+
     total_wallet_balance = db.query(
+
         func.coalesce(func.sum(User.wallet_balance), 0)
+
     ).scalar()
 
+
+
     return {
+
         "admin": current_admin.username,
+
         "overview": {
+
             "total_users": total_users,
+
             "active_admins": total_admins,
+
             "total_funding_transactions": total_transactions,
+
             "successful_transactions": successful_transactions,
+
             "pending_transactions": pending_transactions,
+
             "total_wallet_balance": float(total_wallet_balance)
+
         }
+
     }
 
+
+
 @app.post("/paystack/initialize")
+
 def initialize_paystack_payment(
+
     request: FundWalletRequest,
+
     current_user: User = Depends(get_current_user),
+
     db: Session = Depends(get_db)
+
 ):
+
     # Check payment configuration.
+
     if not PAYSTACK_SECRET_KEY:
+
         raise HTTPException(
+
             status_code=503,
+
             detail="Payment service is not configured."
+
         )
+
+
 
     # Paystack requires an email address.
+
     if not current_user.email or not current_user.email.strip():
+
         raise HTTPException(
+
             status_code=400,
+
             detail="Please add an email address to your profile before funding your wallet."
+
         )
 
+
+
     # Reject amounts that cannot be represented exactly in kobo.
+
     if request.amount != request.amount.quantize(Decimal("0.01")):
+
         raise HTTPException(
+
             status_code=400,
+
             detail="Amount must have no more than two decimal places."
+
         )
+
+
 
     reference = secrets.token_urlsafe(24)
 
+
+
     # Save the pending transaction before contacting Paystack.
+
     transaction = WalletTransaction(
+
         user_id=current_user.id,
+
         transaction_type="funding",
+
         amount=request.amount,
+
         status="pending",
+
         reference=reference,
+
         gateway="paystack"
+
     )
 
+
+
     try:
+
         db.add(transaction)
+
         db.commit()
+
         db.refresh(transaction)
+
     except Exception:
+
         db.rollback()
+
         raise HTTPException(
+
             status_code=500,
+
             detail="Unable to create the payment transaction."
+
         )
+
+
 
     payload = {
+
         "email": current_user.email.strip(),
+
         "amount": int(request.amount * Decimal("100")),
+
         "reference": reference,
+
        "callback_url": (
+
     "https://omotech-airtime-data.onrender.com/payment-success"
+
 ),
+
     }
+
+
 
     headers = {
+
         "Authorization": f"Bearer {PAYSTACK_SECRET_KEY}",
+
         "Content-Type": "application/json"
+
     }
 
+
+
     try:
+
         response = requests.post(
+
             f"{PAYSTACK_BASE_URL}/transaction/initialize",
+
             json=payload,
+
             headers=headers,
+
             timeout=15
+
         )
 
+
+
         try:
+
             data = response.json()
+
         except ValueError:
+
             # Keep the transaction pending because the outcome is uncertain.
+
             raise HTTPException(
+
                 status_code=502,
+
                 detail="Paystack returned an invalid response. Check the transaction status before retrying."
+
             )
+
+
 
         if not response.ok or not data.get("status"):
+
             transaction.status = "failed"
+
             db.commit()
 
+
+
             raise HTTPException(
+
                 status_code=502,
+
                 detail=data.get(
+
                     "message",
+
                     "Unable to initialize payment."
+
                 )
+
             )
+
+
 
         payment_data = data.get("data", {})
 
+
+
         if (
+
             payment_data.get("reference") != reference
+
             or not payment_data.get("authorization_url")
+
         ):
+
             raise HTTPException(
+
                 status_code=502,
+
                 detail="Paystack returned incomplete payment details. Check the transaction status before retrying."
+
             )
 
+
+
         return {
+
             "authorization_url": payment_data["authorization_url"],
+
             "reference": reference,
+
             "amount": float(transaction.amount),
+
             "status": transaction.status
+
         }
 
+
+
     except requests.Timeout:
+
         # Do not mark failed: Paystack may have initialized the payment
+
         # even though the response timed out.
+
         raise HTTPException(
+
             status_code=504,
+
             detail="Paystack timed out. Check your transaction history before trying again."
+
         )
+
+
 
     except requests.RequestException:
+
         # The result may be uncertain, so retain the pending transaction.
+
         raise HTTPException(
+
             status_code=502,
+
             detail="Unable to contact Paystack. Check your transaction history before trying again."
+
         )
+
+
 
     except HTTPException:
+
         raise
 
+
+
     except Exception:
+
         db.rollback()
+
         raise HTTPException(
+
             status_code=500,
+
             detail="An unexpected error occurred while initializing payment."
+
         )
+
+
+
 
 
 @app.get("/payment-success")
+
 def payment_success(reference: str):
+
     return FileResponse("payment-success.html")
 
 
+
+
+
 @app.post("/admin/wallet/verify/{reference}")
+
 def verify_admin_wallet_funding(
+
     reference: str,
+
     current_admin: Admin = Depends(get_current_admin),
+
     db: Session = Depends(get_db)
+
 ):
+
     if not PAYSTACK_SECRET_KEY:
+
         raise HTTPException(
+
             status_code=503,
+
             detail="Payment service is not configured."
+
         )
+
+
 
     try:
+
         response = requests.get(
+
             f"{PAYSTACK_BASE_URL}/transaction/verify/{reference}",
+
             headers={
+
                 "Authorization": f"Bearer {PAYSTACK_SECRET_KEY}"
+
             },
+
             timeout=15
+
         )
+
         response.raise_for_status()
+
         result = response.json()
 
+
+
     except requests.Timeout:
+
         raise HTTPException(
+
             status_code=504,
+
             detail="Paystack verification timed out. Please try again."
+
         )
+
     except (requests.RequestException, ValueError):
+
         raise HTTPException(
+
             status_code=502,
+
             detail="Unable to verify payment with Paystack."
+
         )
+
+
 
     payment = result.get("data") or {}
 
+
+
     if not result.get("status"):
+
         raise HTTPException(
+
             status_code=502,
+
             detail="Paystack could not verify the payment."
+
         )
+
+
 
     if payment.get("status") != "success":
+
         return {
+
             "message": "Payment has not been completed.",
+
             "status": payment.get("status"),
+
             "reference": reference
+
         }
 
+
+
     if payment.get("reference") != reference:
+
         raise HTTPException(
+
             status_code=400,
+
             detail="Payment reference mismatch."
+
         )
+
+
 
     if payment.get("currency") != "NGN":
+
         raise HTTPException(
+
             status_code=400,
+
             detail="Payment currency is not supported."
+
         )
 
+
+
     payment_email = (
+
         (payment.get("customer") or {}).get("email") or ""
+
     ).strip().lower()
+
+
 
     admin_email = (current_admin.email or "").strip().lower()
 
+
+
     if not admin_email or payment_email != admin_email:
+
         raise HTTPException(
+
             status_code=400,
+
             detail="Payment email does not match the admin account."
+
         )
+
+
 
     try:
+
         transaction = (
+
             db.query(WalletTransaction)
+
             .filter(
+
                 WalletTransaction.reference == reference,
+
                 WalletTransaction.admin_id == current_admin.id,
+
                 WalletTransaction.user_id.is_(None)
+
             )
+
             .with_for_update()
+
             .first()
+
         )
+
+
 
         if not transaction:
+
             raise HTTPException(
+
                 status_code=404,
+
                 detail="Admin funding transaction not found."
+
             )
+
+
 
         if (
+
             transaction.transaction_type != "funding"
+
             or transaction.gateway != "paystack"
+
         ):
+
             raise HTTPException(
+
                 status_code=400,
+
                 detail="This is not a valid admin funding transaction."
+
             )
+
+
 
         if transaction.status == "success":
+
             return {
+
                 "message": "Payment has already been credited.",
+
                 "status": "success",
+
                 "reference": reference,
+
                 "amount": float(transaction.amount),
+
                 "wallet_balance": float(current_admin.wallet_balance)
+
             }
 
+
+
         if transaction.status != "pending":
+
             raise HTTPException(
+
                 status_code=400,
+
                 detail="This transaction cannot be credited."
+
             )
+
+
 
         paystack_amount = (
+
             Decimal(str(payment.get("amount", 0)))
+
             / Decimal("100")
+
         )
+
+
 
         if paystack_amount != Decimal(str(transaction.amount)):
+
             raise HTTPException(
+
                 status_code=400,
+
                 detail="Payment amount does not match the transaction."
+
             )
 
+
+
         db.execute(
+
             update(Admin)
+
             .where(Admin.id == current_admin.id)
+
             .values(
+
                 wallet_balance=(
+
                     Admin.wallet_balance + transaction.amount
+
                 )
+
             )
+
         )
+
+
 
         transaction.status = "success"
 
+
+
         db.add(
+
             AdminAuditLog(
+
                 admin_id=current_admin.id,
+
                 user_id=None,
+
                 action="admin_wallet_funding_completed",
+
                 amount=transaction.amount,
+
                 reason="Paystack funding verified successfully",
+
                 reference=reference
+
             )
+
         )
+
+
 
         db.commit()
+
         db.refresh(current_admin)
+
         db.refresh(transaction)
 
+
+
         return {
+
             "message": "Admin wallet funded successfully.",
+
             "status": transaction.status,
+
             "reference": transaction.reference,
+
             "amount": float(transaction.amount),
+
             "wallet_balance": float(current_admin.wallet_balance)
+
         }
 
+
+
     except HTTPException:
+
         db.rollback()
+
         raise
+
     except Exception:
+
         db.rollback()
+
         raise HTTPException(
+
             status_code=500,
+
             detail="Unable to process admin payment verification."
+
         )
+
+
+
+
+
 
 
 
 
 @app.get("/paystack/verify/{reference}")
+
 def verify_paystack_payment(
+
     reference: str,
+
     current_user: User = Depends(get_current_user),
+
     db: Session = Depends(get_db)
+
 ):
+
     if not PAYSTACK_SECRET_KEY:
+
         raise HTTPException(
+
             status_code=503,
+
             detail="Payment service is not configured."
+
         )
+
+
 
     try:
+
         response = requests.get(
+
             f"{PAYSTACK_BASE_URL}/transaction/verify/{reference}",
+
             headers={
+
                 "Authorization": f"Bearer {PAYSTACK_SECRET_KEY}"
+
             },
+
             timeout=15
+
         )
+
         response.raise_for_status()
+
         data = response.json()
 
+
+
     except requests.Timeout:
+
         raise HTTPException(
+
             status_code=504,
+
             detail="Paystack verification timed out. Please try again."
-        )
-    except requests.RequestException:
-        raise HTTPException(
-            status_code=502,
-            detail="Unable to contact Paystack."
-        )
-    except ValueError:
-        raise HTTPException(
-            status_code=502,
-            detail="Paystack returned an invalid response."
+
         )
 
-    if not data.get("status"):
+    except requests.RequestException:
+
         raise HTTPException(
+
             status_code=502,
-            detail="Paystack could not verify the payment."
+
+            detail="Unable to contact Paystack."
+
         )
+
+    except ValueError:
+
+        raise HTTPException(
+
+            status_code=502,
+
+            detail="Paystack returned an invalid response."
+
+        )
+
+
+
+    if not data.get("status"):
+
+        raise HTTPException(
+
+            status_code=502,
+
+            detail="Paystack could not verify the payment."
+
+        )
+
+
 
     payment_data = data.get("data") or {}
 
+
+
     if payment_data.get("status") != "success":
+
         return {
+
             "message": "Payment has not been completed.",
+
             "status": payment_data.get("status"),
+
             "reference": reference
+
         }
+
+
 
     if payment_data.get("reference") != reference:
+
         raise HTTPException(
+
             status_code=400,
+
             detail="Payment reference mismatch."
+
         )
+
+
 
     if payment_data.get("currency") != "NGN":
+
         raise HTTPException(
+
             status_code=400,
+
             detail="Payment currency is not supported."
+
         )
+
+
 
     if not current_user.email or not current_user.email.strip():
+
         raise HTTPException(
+
             status_code=400,
+
             detail="Please add an email address to your profile."
+
         )
+
+
 
     customer_email = (
+
         (payment_data.get("customer") or {}).get("email") or ""
+
     ).strip().lower()
 
+
+
     if customer_email != current_user.email.strip().lower():
+
         raise HTTPException(
+
             status_code=400,
+
             detail="Payment email does not match your account."
+
         )
+
+
 
     try:
+
         transaction = (
+
             db.query(WalletTransaction)
+
             .filter(
+
                 WalletTransaction.reference == reference,
+
                 WalletTransaction.user_id == current_user.id
+
             )
+
             .with_for_update()
+
             .first()
+
         )
+
+
 
         if not transaction:
+
             raise HTTPException(
+
                 status_code=404,
+
                 detail="Wallet transaction not found."
+
             )
+
+
 
         if (
+
             transaction.transaction_type != "funding"
+
             or transaction.gateway != "paystack"
+
         ):
+
             raise HTTPException(
+
                 status_code=400,
+
                 detail="This is not a valid Paystack funding transaction."
+
             )
+
+
 
         if transaction.status == "success":
+
             db.commit()
+
             return {
+
                 "message": "Payment has already been credited.",
+
                 "status": "success",
+
                 "reference": reference,
+
                 "amount": float(transaction.amount)
+
             }
 
+
+
         if transaction.status != "pending":
+
             raise HTTPException(
+
                 status_code=400,
+
                 detail="This transaction cannot be credited."
+
             )
+
+
 
         paystack_amount = (
+
             Decimal(str(payment_data.get("amount", 0)))
+
             / Decimal("100")
+
         )
+
         transaction_amount = Decimal(str(transaction.amount))
 
+
+
         if transaction_amount != paystack_amount:
+
             raise HTTPException(
+
                 status_code=400,
+
                 detail="Payment amount does not match the wallet transaction."
+
             )
+
+
 
         result = db.execute(
+
             update(User)
+
             .where(User.id == transaction.user_id)
+
             .values(
+
                 wallet_balance=User.wallet_balance + transaction.amount
+
             )
+
         )
+
+
 
         if result.rowcount != 1:
+
             raise HTTPException(
+
                 status_code=404,
+
                 detail="Wallet owner not found."
+
             )
 
+
+
         transaction.status = "success"
+
         db.commit()
 
+
+
         db.refresh(current_user)
+
         db.refresh(transaction)
 
+
+
         return {
+
             "message": "Payment verified and wallet credited successfully.",
+
             "status": transaction.status,
+
             "reference": transaction.reference,
+
             "amount": float(transaction.amount),
+
             "wallet_balance": float(current_user.wallet_balance)
+
         }
 
+
+
     except HTTPException:
+
         db.rollback()
+
         raise
+
     except Exception:
+
         db.rollback()
+
         raise HTTPException(
+
             status_code=500,
+
             detail="Unable to process payment verification."
+
         )
 
 
-# =========================
-# SERVE FRONTEND
+
+
+
 # =========================
 
+# SERVE FRONTEND
+
+# =========================
+
+
+
 @app.get("/app")
+
 def serve_app():
+
+
 
     return FileResponse("index.html")
 
 
+
+
+
 @app.get("/admin-login.html", response_class=FileResponse)
+
 def serve_admin_login():
+
     return FileResponse("admin-login.html")
 
 
 
-@app.get("/admin-dashboard.html", response_class=FileResponse)
-def serve_admin_dashboard():
-    return FileResponse("admin-dashboard.html")
 
+
+
+
+@app.get("/admin-dashboard.html", response_class=FileResponse)
+
+def serve_admin_dashboard():
+
+    return FileResponse("admin-dashboard.html")

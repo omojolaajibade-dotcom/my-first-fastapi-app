@@ -1153,10 +1153,10 @@ async function buyAirtime() {
         return;
     }
 
-    if (!Number.isFinite(amount) || amount > 1000000) {
-        message.textContent = "Please enter a valid airtime amount.";
-        return;
-    }
+if (!Number.isFinite(amount) || amount > 100000) {
+    message.textContent = "Maximum airtime purchase is ₦100,000.";
+    return;
+}
 
     if (!confirm(
         "Confirm airtime purchase:\n\n" +
@@ -1173,10 +1173,11 @@ async function buyAirtime() {
     try {
         const response = await fetch("/airtime/purchase", {
             method: "POST",
-            headers: {
-                "Content-Type": "application/json",
-                "Authorization": `Bearer ${token}`
-            },
+           headers: {
+    "Content-Type": "application/json",
+    "Authorization": `Bearer ${token}`,
+    "Idempotency-Key": crypto.randomUUID()
+},
             body: JSON.stringify({
                 network: network,
                 phone: phone,
@@ -1354,7 +1355,7 @@ async function loadDataPlans() {
 
     try {
         const response = await fetch(
-            `/api/plans/${encodeURIComponent(networkKey)}`
+            `/data/plans/${encodeURIComponent(networkKey)}`
         );
 
         const result = await response.json();
@@ -1388,8 +1389,9 @@ async function loadDataPlans() {
             const option = document.createElement("option");
 
             option.value = String(plan.plan_id);
+            const validity = plan.validity || "Validity not specified";
             option.textContent =
-                `${plan.name} — ₦${Number(plan.price).toLocaleString("en-NG")}`;
+                `${plan.name} (${validity}) — ₦${Number(plan.price).toLocaleString("en-NG")}`;
 
             planSelect.appendChild(option);
         });
@@ -1413,67 +1415,125 @@ async function loadDataPlans() {
     }
 }
 
-function buyData() {
+
+async function buyData() {
     const network = document.getElementById("dataNetwork").value;
     const phone = document.getElementById("dataPhone").value.trim();
     const plan = document.getElementById("dataPlan").value;
     const message = document.getElementById("dataMessage");
 
     if (!network || !phone || !plan) {
-        message.textContent = "Please select a network, enter a phone number, and choose a data plan.";
+        message.textContent =
+            "Please select a network, enter a phone number, and choose a data plan.";
         return;
     }
-let number = phone.replace(/[\s-]/g, "");
 
-if (number.startsWith("+234")) {
-    number = "0" + number.slice(4);
-} else if (number.startsWith("234")) {
-    number = "0" + number.slice(3);
-}
+    let number = phone.replace(/[\s-]/g, "");
 
-if (!/^0\d{10}$/.test(number)) {
-    message.textContent = "Please enter a valid Nigerian phone number.";
-    return;
-}
+    if (number.startsWith("+234")) {
+        number = "0" + number.slice(4);
+    } else if (number.startsWith("234")) {
+        number = "0" + number.slice(3);
+    }
 
-const networkPrefixes = {
-    MTN: [
-        "0703", "0704", "0706", "0803", "0806",
-        "0810", "0813", "0814", "0816",
-        "0903", "0906", "0913", "0916",
-        "07025", "07026"
-    ],
-    Airtel: [
-        "0701", "0708", "0802", "0808", "0812",
-        "0901", "0902", "0904", "0907", "0912"
-    ],
-    Glo: [
-        "0705", "0805", "0807", "0811", "0815",
-        "0905", "0915"
-    ],
-    "9mobile": [
-        "0809", "0817", "0818", "0908", "0909"
-    ]
-};
+    if (!/^0\d{10}$/.test(number)) {
+        message.textContent = "Please enter a valid Nigerian phone number.";
+        return;
+    }
 
-const detectedNetwork = Object.entries(networkPrefixes).find(
-    ([name, prefixes]) =>
-        prefixes.some(prefix => number.startsWith(prefix))
-)?.[0];
+    const networkPrefixes = {
+        MTN: ["0703", "0704", "0706", "0803", "0806", "0810", "0813", "0814", "0816", "0903", "0906", "0913", "0916", "07025", "07026"],
+        Airtel: ["0701", "0708", "0802", "0808", "0812", "0901", "0902", "0904", "0907", "0912"],
+        Glo: ["0705", "0805", "0807", "0811", "0815", "0905", "0915"],
+        "9mobile": ["0809", "0817", "0818", "0908", "0909"]
+    };
 
-if (detectedNetwork && detectedNetwork !== network) {
-    message.textContent = "This is not an " + network + " number. The prefix suggests " + detectedNetwork + ".";
-    return;
-}
+    const detectedNetwork = Object.entries(networkPrefixes).find(
+        ([name, prefixes]) =>
+            prefixes.some(prefix => number.startsWith(prefix))
+    )?.[0];
 
-if (!detectedNetwork) {
-    message.textContent = "We cannot identify this number's network. Please check the number.";
-    return;
-}
+    if (detectedNetwork && detectedNetwork !== network) {
+        message.textContent =
+            "This is not an " + network + " number. The prefix suggests " + detectedNetwork + ".";
+        return;
+    }
 
-message.textContent =
-    "Details validated. Data purchase is not connected to the provider yet.";
+    if (!detectedNetwork) {
+        message.textContent =
+            "We cannot identify this number's network. Please check the number.";
+        return;
+    }
 
+    const variationCode = Number(plan);
+
+    if (!Number.isInteger(variationCode) || variationCode <= 0) {
+        message.textContent = "Invalid data plan selected.";
+        return;
+    }
+
+    const selectedPlan =
+        document.getElementById("dataPlan").selectedOptions[0].textContent;
+
+    const confirmed = confirm(
+        "Confirm data purchase:\n\n" +
+        "Network: " + network + "\n" +
+        "Phone: " + number + "\n" +
+        "Plan: " + selectedPlan + "\n\n" +
+        "Continue with this purchase?"
+    );
+
+    if (!confirmed) return;
+
+    message.textContent = "Submitting your purchase. Please wait...";
+
+    const button = document.querySelector(
+        'button[onclick="buyData()"]'
+    );
+
+    if (button) button.disabled = true;
+
+    try {
+        const token = localStorage.getItem("access_token");
+
+        if (!token) {
+            throw new Error("Please log in again before purchasing data.");
+        }
+
+        const response = await fetch("/data/purchase", {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                "Authorization": "Bearer " + token,
+                "Idempotency-Key": "omotech-data-" + crypto.randomUUID()
+            },
+            body: JSON.stringify({
+                network: network.toLowerCase(),
+                phone: number,
+                variation_code: String(variationCode)
+            })
+        });
+
+        const result = await response.json();
+
+        if (!response.ok) {
+            throw new Error(
+                result.detail || result.message || "The purchase request failed."
+            );
+        }
+
+        message.textContent =
+            "Reference: " + (result.reference || "Pending") +
+            " | Status: " + (result.status || "Pending") +
+            " | " + (result.message || "Purchase submitted. Check transaction status.");
+
+    } catch (error) {
+        message.textContent =
+            error.message || "Unable to submit the purchase. Check your connection.";
+        console.error("Data purchase error:", error);
+    } finally {
+        if (button) button.disabled = false;
+    }
 }
 
 

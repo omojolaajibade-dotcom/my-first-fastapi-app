@@ -6,3 +6,30 @@ venv/
 cloudflared.exe.exe
 .env
 customers.db
+# Environment and secrets
+.env
+.env.*
+
+# Database backups
+*.dump
+*.sql
+*.backup
+*.bak
+
+# Local recovery copies
+*.before_*
+main_before_*.py
+config_before_*.bak
+index_before_*.bak
+
+# Temporary verification files
+temp_*.js
+verify_connection.py
+review_frontend.diff
+staged_admin_check.html
+payment-success-before-admin.html
+
+# Python cache
+__pycache__/
+
+omotech_restore.list

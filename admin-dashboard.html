@@ -1225,6 +1225,149 @@ document.getElementById("fundAdminWalletButton").addEventListener(
         if (token) {
             loadDashboard();
         }
+
+const DATA_PLANS_URL = "/data/plans";
+const DATA_PURCHASE_URL = "/data/purchase";
+
+const dataNetworkSelect = document.getElementById("dataNetwork");
+const dataPlanSelect = document.getElementById("dataPlan");
+const dataPhoneInput = document.getElementById("dataPhone");
+const buyDataButton = document.getElementById("buyDataBtn");
+const dataResult = document.getElementById("dataPurchaseResult");
+
+async function loadDataPlans() {
+    const network = dataNetworkSelect.value.trim().toLowerCase();
+
+    dataPlanSelect.replaceChildren(
+        new Option("Loading plans...", "")
+    );
+    dataPlanSelect.disabled = true;
+    buyDataButton.disabled = true;
+
+    try {
+        const response = await fetch(
+            `${DATA_PLANS_URL}/${encodeURIComponent(network)}`,
+            { headers: { Accept: "application/json" } }
+        );
+
+        const result = await response.json();
+
+        if (!response.ok) {
+            throw new Error(result.detail || "Unable to load data plans.");
+        }
+
+        const plans = Array.isArray(result.plans) ? result.plans : [];
+
+        dataPlanSelect.replaceChildren(
+            new Option("Select a data plan", "")
+        );
+
+        for (const plan of plans) {
+            const planId = Number(plan.plan_id);
+            const price = Number(plan.price);
+
+            if (
+                !Number.isInteger(planId) ||
+                planId <= 0 ||
+                !Number.isFinite(price) ||
+                price <= 0
+            ) {
+                continue;
+            }
+
+            const option = new Option(
+                `${plan.name} — ₦${price.toLocaleString("en-NG")}`,
+                String(planId)
+            );
+
+            option.dataset.price = String(price);
+            dataPlanSelect.add(option);
+        }
+
+        dataPlanSelect.disabled = false;
+        dataResult.textContent = plans.length
+            ? "Plans loaded. Purchases remain subject to backend availability."
+            : "No available plans for this network.";
+
+    } catch (error) {
+        dataPlanSelect.replaceChildren(
+            new Option("Plans unavailable", "")
+        );
+        dataResult.textContent = error.message;
+    } finally {
+        updateBuyDataButton();
+    }
+}
+
+function updateBuyDataButton() {
+    buyDataButton.disabled = !(
+        dataNetworkSelect.value &&
+        dataPlanSelect.value &&
+        dataPhoneInput.value.trim()
+    );
+}
+
+dataNetworkSelect.addEventListener("change", loadDataPlans);
+dataPlanSelect.addEventListener("change", updateBuyDataButton);
+dataPhoneInput.addEventListener("input", updateBuyDataButton);
+
+buyDataButton.addEventListener("click", async () => {
+    const network = dataNetworkSelect.value.trim().toLowerCase();
+    const phone = dataPhoneInput.value.trim();
+    const planId = Number(dataPlanSelect.value);
+
+    if (!Number.isInteger(planId) || planId <= 0) {
+        dataResult.textContent = "Please select a valid data plan.";
+        return;
+    }
+
+    if (!/^0\d{10}$/.test(phone)) {
+        dataResult.textContent =
+            "Enter a valid 11-digit Nigerian phone number.";
+        return;
+    }
+
+    dataResult.textContent =
+        "Submitting request. The backend must authorize purchases.";
+    buyDataButton.disabled = true;
+
+    try {
+        const response = await fetch(DATA_PURCHASE_URL, {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+                "Idempotency-Key": crypto.randomUUID()
+            },
+            body: JSON.stringify({
+                network,
+                phone,
+                variation_code: String(planId)
+            })
+        });
+
+        const result = await response.json();
+
+        if (!response.ok) {
+            throw new Error(
+                typeof result.detail === "string"
+                    ? result.detail
+                    : "The backend rejected the purchase request."
+            );
+        }
+
+        dataResult.textContent =
+            `Status: ${result.status || "submitted"}. ` +
+            `Reference: ${result.reference || "not provided"}`;
+
+    } catch (error) {
+        dataResult.textContent = error.message;
+    } finally {
+        updateBuyDataButton();
+    }
+});
+
+
     </script>
 </body>
 </html>
