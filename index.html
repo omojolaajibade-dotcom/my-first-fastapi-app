@@ -1336,6 +1336,29 @@ function detectDataNetwork() {
         "Network not recognised. Please select your network manually.";
 }
 
+function getApiErrorMessage(value, fallback) {
+    if (typeof value === "string") {
+        return value;
+    }
+
+    if (Array.isArray(value)) {
+        return value.map(item => {
+            if (typeof item === "string") return item;
+            if (item && typeof item === "object") {
+                return item.msg || item.message || JSON.stringify(item);
+            }
+            return String(item);
+        }).join("; ");
+    }
+
+    if (value && typeof value === "object") {
+        return value.message || value.msg || value.detail ||
+            JSON.stringify(value);
+    }
+
+    return fallback;
+}
+
 async function loadDataPlans() {
     const network = document.getElementById("dataNetwork").value;
     const planSelect = document.getElementById("dataPlan");
@@ -1361,10 +1384,13 @@ async function loadDataPlans() {
         const result = await response.json();
 
         if (!response.ok) {
-            throw new Error(
-                result.detail || "Unable to load data plans."
-            );
-        }
+    throw new Error(
+        getApiErrorMessage(
+            result.detail || result.message,
+            "Unable to load data plans."
+        )
+    );
+}
 
         planSelect.innerHTML =
             '<option value="">Choose a data plan</option>';
@@ -1407,9 +1433,10 @@ async function loadDataPlans() {
         planSelect.innerHTML =
             '<option value="">Could not load plans</option>';
 
-        message.textContent =
-            error.message ||
-            "Unable to load data plans. Please try again.";
+        message.textContent = getApiErrorMessage(
+    error.message,
+    "Unable to load data plans. Please try again."
+);
 
         console.error("Ridamsub plan loading error:", error);
     }
@@ -1508,18 +1535,21 @@ async function buyData() {
                 "Idempotency-Key": "omotech-data-" + crypto.randomUUID()
             },
             body: JSON.stringify({
-                network: network.toLowerCase(),
-                phone: number,
-                variation_code: String(variationCode)
-            })
+    network: network,
+    phone: number,
+    variation_code: String(variationCode)
+})
         });
 
         const result = await response.json();
 
         if (!response.ok) {
             throw new Error(
-                result.detail || result.message || "The purchase request failed."
-            );
+    getApiErrorMessage(
+        result.detail || result.message,
+        "The purchase request failed."
+    )
+);
         }
 
         message.textContent =
@@ -1528,8 +1558,10 @@ async function buyData() {
             " | " + (result.message || "Purchase submitted. Check transaction status.");
 
     } catch (error) {
-        message.textContent =
-            error.message || "Unable to submit the purchase. Check your connection.";
+        message.textContent = getApiErrorMessage(
+    error.message,
+    "Unable to submit the purchase. Check your connection."
+);
         console.error("Data purchase error:", error);
     } finally {
         if (button) button.disabled = false;
