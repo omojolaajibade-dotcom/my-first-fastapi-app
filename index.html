@@ -683,34 +683,60 @@
 <div class="card hidden" id="dataCard">
     <h2>Buy Data</h2>
 
-    <label for="dataNetwork">Select Network</label>
+    <div id="dataPurchaseForm">
+        <label for="dataNetwork">Select Network</label>
+        <select id="dataNetwork" onchange="loadDataPlans()">
+            <option value="">Choose network</option>
+            <option value="MTN">MTN</option>
+            <option value="Airtel">Airtel</option>
+            <option value="Glo">Glo</option>
+            <option value="9mobile">9mobile</option>
+        </select>
 
-<select id="dataNetwork" onchange="loadDataPlans()">
-    <option value="">Choose network</option>
-    <option value="MTN">MTN</option>
-    <option value="Airtel">Airtel</option>
-    <option value="Glo">Glo</option>
-    <option value="9mobile">9mobile</option>
-</select>
+        <label for="dataPhone">Phone Number</label>
+        <input type="tel" id="dataPhone" placeholder="Enter phone number">
 
+        <label for="dataPlan">Select Data Plan</label>
+        <select id="dataPlan">
+            <option value="">Select a network first</option>
+        </select>
 
-    <label for="dataPhone">Phone Number</label>
-    <input type="tel" id="dataPhone" placeholder="Enter phone number">
+        <p id="dataMessage"></p>
 
+        <button type="button" onclick="buyData()">Continue</button>
 
-<label for="dataPlan">Select Data Plan</label>
-<select id="dataPlan">
-    <option value="">Select a network first</option>
-</select>
+        <button
+            type="button"
+            class="secondary-button"
+            onclick="showDashboardFromData()"
+        >
+            Back to Dashboard
+        </button>
+    </div>
 
+    <div id="dataReceipt" class="hidden">
+        <h3 id="dataReceiptTitle">Data Purchase Result</h3>
+        <p id="dataReceiptStatus"></p>
+        <p id="dataReceiptNetwork"></p>
+        <p id="dataReceiptPhone"></p>
+        <p id="dataReceiptPlan"></p>
+        <p id="dataReceiptAmount"></p>
+        <p id="dataReceiptReference"></p>
+        <p id="dataReceiptMessage"></p>
 
-    <p id="dataMessage"></p>
-
-    <button type="button" onclick="buyData()">Continue</button>
-    <button type="button" class="secondary-button" onclick="showDashboardFromData()">Back to Dashboard</button>
+        <button
+            type="button"
+            class="secondary-button"
+            onclick="showDashboardFromData()"
+        >
+            Back to Dashboard
+        </button>
+    </div>
 </div>
-
     <script>
+
+        let dataPurchaseInProgress = false;
+        let dataPurchaseNeedsVerification = false;
 
         // =========================
         // LOGIN
@@ -1272,9 +1298,40 @@ async function fundWallet() {
 }
 
 function showData() {
+    const purchaseForm = document.getElementById("dataPurchaseForm");
+    const receipt = document.getElementById("dataReceipt");
+    const message = document.getElementById("dataMessage");
+
+    if (dataPurchaseInProgress) {
+        purchaseForm.classList.remove("hidden");
+        receipt.classList.add("hidden");
+        message.textContent =
+            "Your purchase is still processing. Please wait and do not submit another request.";
+
+        const button = purchaseForm.querySelector(
+            'button[onclick="buyData()"]'
+        );
+
+        if (button) button.disabled = true;
+
+    } else if (dataPurchaseNeedsVerification) {
+        purchaseForm.classList.add("hidden");
+        receipt.classList.remove("hidden");
+
+    } else {
+        purchaseForm.classList.remove("hidden");
+        receipt.classList.add("hidden");
+        message.textContent = "";
+
+        const button = purchaseForm.querySelector(
+            'button[onclick="buyData()"]'
+        );
+
+        if (button) button.disabled = false;
+    }
+
     showOnlyScreen("dataCard");
 }
-
 
 function showDashboardFromData() {
     showOnlyScreen("dashboardCard");
@@ -1442,12 +1499,21 @@ async function loadDataPlans() {
     }
 }
 
-
 async function buyData() {
     const network = document.getElementById("dataNetwork").value;
     const phone = document.getElementById("dataPhone").value.trim();
     const plan = document.getElementById("dataPlan").value;
     const message = document.getElementById("dataMessage");
+
+    const purchaseForm = document.getElementById("dataPurchaseForm");
+    const receipt = document.getElementById("dataReceipt");
+
+    const button = purchaseForm.querySelector(
+        'button[onclick="buyData()"]'
+    );
+
+    if (purchaseForm.classList.contains("hidden")) return;
+    if (button && button.disabled) return;
 
     if (!network || !phone || !plan) {
         message.textContent =
@@ -1514,18 +1580,64 @@ async function buyData() {
 
     message.textContent = "Submitting your purchase. Please wait...";
 
-    const button = document.querySelector(
-        'button[onclick="buyData()"]'
-    );
-
     if (button) button.disabled = true;
+
+    let requestStarted = false;
+
+    function displayReceipt(status, result, receiptMessage) {
+                dataPurchaseInProgress = false;
+                dataPurchaseNeedsVerification =
+            status !== "success" && status !== "failed";
+        document.getElementById("dataReceiptTitle").textContent =
+            status === "success"
+                ? "Data purchased successfully!"
+                : status === "failed"
+                    ? "Purchase failed"
+                    : "Purchase status requires verification";
+
+        document.getElementById("dataReceiptStatus").textContent =
+            "Status: " + status;
+
+        document.getElementById("dataReceiptNetwork").textContent =
+            "Network: " + network;
+
+        document.getElementById("dataReceiptPhone").textContent =
+            "Phone: " + number;
+
+        document.getElementById("dataReceiptPlan").textContent =
+            "Plan: " + selectedPlan;
+
+        const amount = Number(result.amount);
+
+        document.getElementById("dataReceiptAmount").textContent =
+            result.amount !== undefined && Number.isFinite(amount)
+                ? "Amount: ₦" + amount.toLocaleString("en-NG", {
+                    minimumFractionDigits: 2,
+                    maximumFractionDigits: 2
+                })
+                : "Amount: Check transaction history";
+
+        document.getElementById("dataReceiptReference").textContent =
+            "Reference: " + (result.reference || "Not returned");
+
+        document.getElementById("dataReceiptMessage").textContent =
+            receiptMessage;
+
+        purchaseForm.classList.add("hidden");
+        receipt.classList.remove("hidden");
+    }
 
     try {
         const token = localStorage.getItem("access_token");
 
         if (!token) {
-            throw new Error("Please log in again before purchasing data.");
+            throw new Error(
+                "Please log in again before purchasing data."
+            );
         }
+
+                dataPurchaseInProgress = true;
+        requestStarted = true;
 
         const response = await fetch("/data/purchase", {
             method: "POST",
@@ -1535,39 +1647,75 @@ async function buyData() {
                 "Idempotency-Key": "omotech-data-" + crypto.randomUUID()
             },
             body: JSON.stringify({
-    network: network,
-    phone: number,
-    variation_code: String(variationCode)
-})
+                network: network,
+                phone: number,
+                variation_code: String(variationCode)
+            })
         });
 
         const result = await response.json();
 
         if (!response.ok) {
             throw new Error(
-    getApiErrorMessage(
-        result.detail || result.message,
-        "The purchase request failed."
-    )
-);
+                getApiErrorMessage(
+                    result.detail || result.message,
+                    "The purchase request failed."
+                )
+            );
         }
 
-        message.textContent =
-            "Reference: " + (result.reference || "Pending") +
-            " | Status: " + (result.status || "Pending") +
-            " | " + (result.message || "Purchase submitted. Check transaction status.");
+        const status = String(
+            result.status || "pending"
+        ).toLowerCase();
+
+        if (status === "success") {
+            displayReceipt(
+                "success",
+                result,
+                result.message || "Your data purchase was confirmed successfully."
+            );
+        } else if (status === "failed") {
+            displayReceipt(
+                "failed",
+                result,
+                "The provider reported a failed transaction. Check your wallet and transaction history."
+            );
+        } else {
+            displayReceipt(
+                "pending",
+                result,
+                "Your transaction is not yet confirmed. Do not retry this purchase. Check your transaction status."
+            );
+        }
 
     } catch (error) {
-        message.textContent = getApiErrorMessage(
-    error.message,
-    "Unable to submit the purchase. Check your connection."
-);
         console.error("Data purchase error:", error);
+
+        if (requestStarted) {
+            displayReceipt(
+                "pending",
+                {},
+                "We could not confirm the result of this request. Do not submit another purchase. Check your transaction history before taking further action."
+            );
+                } else {
+            dataPurchaseInProgress = false;
+            dataPurchaseNeedsVerification = false;
+
+            message.textContent = getApiErrorMessage(
+                error.message,
+                "Unable to submit the purchase."
+            );
+        }
+
     } finally {
-        if (button) button.disabled = false;
+        if (
+            button &&
+            !purchaseForm.classList.contains("hidden")
+        ) {
+            button.disabled = false;
+        }
     }
 }
-
 
 function logout() {
     localStorage.removeItem("access_token");
