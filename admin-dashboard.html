@@ -480,14 +480,16 @@
                     <div class="table-wrap">
                         <table>
                             <thead>
-                                <tr>
-                                    <th>Reference</th>
-                                    <th>User</th>
-                                    <th>Type</th>
-                                    <th>Amount</th>
-                                    <th>Status</th>
-                                </tr>
-                            </thead>
+    <tr>
+        <th>ID</th>
+        <th>Reference</th>
+        <th>User ID</th>
+        <th>Type</th>
+        <th>Amount</th>
+        <th>Status</th>
+        <th>Action</th>
+    </tr>
+</thead>
                             <tbody id="recentTransactions">
                                 <tr>
                                     <td colspan="5" class="empty">Loading transactions...</td>
@@ -551,11 +553,12 @@
                                     <th>Type</th>
                                     <th>Amount</th>
                                     <th>Status</th>
+                                    <th>Action</th>
                                 </tr>
                             </thead>
                             <tbody id="transactionsTable">
                                 <tr>
-                                    <td colspan="6" class="empty">Loading transactions...</td>
+                                    <td colspan="7" class="empty">Loading transactions...</td>
                                 </tr>
                             </tbody>
                         </table>
@@ -827,13 +830,28 @@
             return item.amount ?? item.total_amount ?? 0;
         }
 
+        function canReconcileCustomerFunding(item) {
+            const reference = transactionReference(item);
+
+            return (
+                String(item.owner_type ?? "").toLowerCase() === "customer" &&
+                item.user_id != null &&
+                item.admin_id == null &&
+                String(item.transaction_type ?? "").toLowerCase() === "funding" &&
+                String(item.gateway ?? "").toLowerCase() === "paystack" &&
+                String(transactionStatus(item)).toLowerCase() === "pending" &&
+                Boolean(reference && String(reference).trim() && reference !== "—")
+            );
+        }
+
         function renderTransactions(items, targetId, limit = Infinity) {
             const target = document.getElementById(targetId);
             const visible = items.slice(0, limit);
+            const isRecent = targetId === "recentTransactions";
 
             if (!visible.length) {
                 target.innerHTML = renderEmpty(
-                    targetId === "recentTransactions" ? 5 : 6,
+                    isRecent ? 5 : 7,
                     "No transactions found."
                 );
                 return;
@@ -842,7 +860,7 @@
             target.innerHTML = visible.map(item => {
                 const status = transactionStatus(item);
 
-                if (targetId === "recentTransactions") {
+                if (isRecent) {
                     return `
                         <tr>
                             <td>${escapeHtml(transactionReference(item))}</td>
@@ -854,6 +872,10 @@
                     `;
                 }
 
+                const action = canReconcileCustomerFunding(item)
+                    ? `<button type="button" data-reconcile-reference="${escapeHtml(transactionReference(item))}">Reconcile Funding</button>`
+                    : "—";
+
                 return `
                     <tr>
                         <td>${escapeHtml(item.transaction_id ?? item.id ?? "—")}</td>
@@ -862,11 +884,11 @@
                         <td>${escapeHtml(transactionType(item))}</td>
                         <td>${escapeHtml(formatMoney(transactionAmount(item)))}</td>
                         <td><span class="${statusClass(status)}">${escapeHtml(status)}</span></td>
+                        <td>${action}</td>
                     </tr>
                 `;
             }).join("");
         }
-
         function renderUsers() {
             const query = document.getElementById("userSearch").value
                 .trim().toLowerCase();
@@ -1108,9 +1130,60 @@ document.getElementById("refreshTransactions").addEventListener(
         }
     }
 );
-      
 
+document.getElementById("transactionsTable").addEventListener(
+    "click",
+    async (event) => {
+        const button = event.target.closest("[data-reconcile-reference]");
+        if (!button || button.disabled) return;
 
+        const reference = button.dataset.reconcileReference;
+
+        if (!window.confirm(
+            `Reconcile Paystack funding ${reference}? If Paystack confirms success, the customer's Omotech wallet will be credited. This is not a bank or card refund. Continue?`
+        )) {
+            return;
+        }
+
+        button.disabled = true;
+        button.textContent = "Reconciling...";
+
+        try {
+            const result = await api(
+                `/admin/wallet/reconcile-customer/${encodeURIComponent(reference)}`,
+                { method: "POST" }
+            );
+
+            await loadTransactions();
+
+            if (String(result?.status ?? "").toLowerCase() === "success") {
+                let message = result.message ||
+                    "Customer funding reconciled successfully.";
+
+                if (result.wallet_balance != null) {
+                    message += ` New wallet balance: ${formatMoney(result.wallet_balance)}.`;
+                }
+
+                showNotice(message);
+            } else {
+                showNotice(
+                    result.message ||
+                    "Paystack has not confirmed successful payment."
+                );
+            }
+        } catch (error) {
+            showNotice(
+                `${error.message} Verify the transaction status before attempting reconciliation again.`
+            );
+
+            try {
+                await loadTransactions();
+            } catch {
+                // Keep the original error visible.
+            }
+        }
+    }
+);
 
 document.getElementById("refreshAuditLogs").addEventListener(
     "click",
