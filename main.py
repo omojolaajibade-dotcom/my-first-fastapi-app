@@ -3154,7 +3154,7 @@ def initialize_admin_wallet_funding(
 
          "callback_url": (
 
-        "https://omotech-airtime-data.onrender.com/payment-success?flow=admin"
+        "https://omotech.com.ng/payment-success?flow=admin"
 
     ),
 
@@ -5614,7 +5614,7 @@ def initialize_paystack_payment(
 
        "callback_url": (
 
-    "https://omotech-airtime-data.onrender.com/payment-success"
+    "https://omotech.com.ng/payment-success"
 
 ),
 
