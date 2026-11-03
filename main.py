@@ -6128,12 +6128,187 @@ def verify_admin_wallet_funding(
 
         )
 
+@app.post("/admin/wallet/reconcile-customer/{reference}")
+def reconcile_customer_paystack_funding(
+    reference: str,
+    current_admin: Admin = Depends(get_current_admin),
+    db: Session = Depends(get_db),
+):
+    if not PAYSTACK_SECRET_KEY:
+        raise HTTPException(
+            status_code=503,
+            detail="Payment service is not configured."
+        )
 
+    # Verify the payment directly with Paystack.
+    try:
+        response = requests.get(
+            f"{PAYSTACK_BASE_URL}/transaction/verify/{reference}",
+            headers={
+                "Authorization": f"Bearer {PAYSTACK_SECRET_KEY}"
+            },
+            timeout=15
+        )
+        response.raise_for_status()
+        result = response.json()
 
+    except requests.Timeout:
+        raise HTTPException(
+            status_code=504,
+            detail="Paystack verification timed out."
+        )
+    except (requests.RequestException, ValueError):
+        raise HTTPException(
+            status_code=502,
+            detail="Unable to verify payment with Paystack."
+        )
 
+    payment = result.get("data") or {}
 
+    if not result.get("status"):
+        raise HTTPException(
+            status_code=502,
+            detail="Paystack could not verify the payment."
+        )
 
+    if payment.get("status") != "success":
+        return {
+            "status": payment.get("status"),
+            "message": "Paystack has not confirmed successful payment."
+        }
 
+    if payment.get("reference") != reference:
+        raise HTTPException(
+            status_code=400,
+            detail="Payment reference mismatch."
+        )
+
+    if payment.get("currency") != "NGN":
+        raise HTTPException(
+            status_code=400,
+            detail="Unsupported payment currency."
+        )
+
+    try:
+        paystack_amount = (
+            Decimal(str(payment.get("amount", 0)))
+            / Decimal("100")
+        )
+
+        if paystack_amount <= 0:
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid payment amount."
+            )
+
+        transaction = (
+            db.query(WalletTransaction)
+            .filter(
+                WalletTransaction.reference == reference,
+                WalletTransaction.gateway == "paystack",
+                WalletTransaction.transaction_type == "funding",
+                WalletTransaction.user_id.isnot(None),
+                WalletTransaction.admin_id.is_(None)
+            )
+            .with_for_update()
+            .first()
+        )
+
+        if not transaction:
+            raise HTTPException(
+                status_code=404,
+                detail="Customer Paystack funding transaction not found."
+            )
+
+        if transaction.status == "success":
+            return {
+                "status": "success",
+                "message": "Payment has already been credited.",
+                "reference": reference,
+                "amount": float(transaction.amount)
+            }
+
+        if transaction.status != "pending":
+            raise HTTPException(
+                status_code=400,
+                detail="Transaction is not eligible for reconciliation."
+            )
+
+        if paystack_amount != Decimal(str(transaction.amount)):
+            raise HTTPException(
+                status_code=400,
+                detail="Paystack amount does not match the local transaction."
+            )
+
+        user = (
+            db.query(User)
+            .filter(User.id == transaction.user_id)
+            .with_for_update()
+            .first()
+        )
+
+        if not user or not user.email:
+            raise HTTPException(
+                status_code=400,
+                detail="Customer account or email not found."
+            )
+
+        payment_email = (
+            (payment.get("customer") or {}).get("email") or ""
+        ).strip().lower()
+
+        if payment_email != user.email.strip().lower():
+            raise HTTPException(
+                status_code=400,
+                detail="Paystack email does not match the customer account."
+            )
+
+        # Credit only the verified customer's wallet.
+        user.wallet_balance = (
+            Decimal(str(user.wallet_balance))
+            + Decimal(str(transaction.amount))
+        )
+
+        transaction.status = "success"
+
+        db.add(
+            AdminAuditLog(
+                admin_id=current_admin.id,
+                user_id=user.id,
+                action="customer_funding_reconciled",
+                amount=transaction.amount,
+                reason=f"Admin verified Paystack funding: {reference}",
+                reference=reference
+            )
+        )
+
+        db.commit()
+        db.refresh(transaction)
+        db.refresh(user)
+
+        return {
+            "status": "success",
+            "message": "Customer wallet successfully reconciled.",
+            "reference": transaction.reference,
+            "user_id": user.id,
+            "amount": float(transaction.amount),
+            "wallet_balance": float(user.wallet_balance)
+        }
+
+    except HTTPException:
+        db.rollback()
+        raise
+
+    except Exception:
+        db.rollback()
+        logger.exception(
+            "Customer Paystack reconciliation failed for %s",
+            reference
+        )
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to reconcile customer payment."
+        )
 
 
 @app.get("/paystack/verify/{reference}")
