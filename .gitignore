@@ -33,3 +33,12 @@ payment-success-before-admin.html
 __pycache__/
 
 omotech_restore.list
+providers/gndata_readonly_backup.py
+check_gndata_airtime.py
+check_gndata_data.py
+test_gndata_live_data.py
+test_gndata_live_pending.py
+test_gndata_live_services.py
+test_gndata_live_transaction.py
+test_gndata_live_wallet.py
+test_gndata_readonly.py

@@ -56,6 +56,15 @@ from fastapi import HTTPException
 
 from config import RIDAMSUB_NETWORKS, RIDAMSUB_DATA_PLANS
 
+from providers.gndata import GNDataClient, GNDataError
+from providers.gndata_pricing import (
+    NETWORKS as GN_DATA_NETWORKS,
+    get_network_plans,
+    get_plan,
+    get_selling_price,
+    validate_pricing,
+)
+
 
 
 from fastapi import Depends, FastAPI, HTTPException, Request, Query
@@ -100,7 +109,11 @@ from pwdlib import PasswordHash
 
 load_dotenv()
 
-
+from security import (
+    encrypt_phone_number,
+    decrypt_phone_number,
+    hash_phone_number,
+)
 
 
 
@@ -257,17 +270,18 @@ class User(Base):
 
 
     phone = Column(
+    String(255),
+    unique=True,
+    nullable=False,
+    index=True
+)
 
-        String(20),
-
-        unique=True,
-
-        nullable=False,
-
-        index=True
-
-    )
-
+    phone_hash = Column(
+    String(64),
+    unique=True,
+    nullable=True,
+    index=True
+)
 
 
     email = Column(
@@ -627,6 +641,7 @@ class WalletTransaction(Base):
     transaction_type = Column(String(30), nullable=False)
 
     amount = Column(Numeric(12, 2), nullable=False)
+    provider_cost = Column(Numeric(12, 2), nullable=True)
 
     status = Column(String(20), nullable=False, default="pending")
 
@@ -636,11 +651,12 @@ class WalletTransaction(Base):
 
 
 
-     # Ridamsub transaction tracking
+     # Provider transaction tracking (Ridamsub and GN Data)
 
     provider_transaction_id = Column(String(100), nullable=True, index=True)
 
     idempotency_key = Column(String(100), nullable=True)
+    request_fingerprint = Column(String(64), nullable=True)
 
 
 
@@ -810,89 +826,136 @@ def normalize_provider_status(response_json):
 
 
 
+def normalize_gndata_status(response_json):
+    """Safely normalize GN Data transaction statuses."""
+
+    if not isinstance(response_json, dict):
+        return PENDING_REQUERY
+
+    value = response_json.get("status")
+
+    if not isinstance(value, str):
+        return PENDING_REQUERY
+
+    value = value.strip().lower()
+
+    if value == "success":
+        return "success"
+
+    if value in {"failed", "refund"}:
+        return "failed"
+
+    # Pending and unknown responses remain unresolved.
+    return PENDING_REQUERY
+
+
+
+
+
+
+def resolve_data_provider_and_price(network, plan_id):
+    """
+    Select GN Data first when it offers the requested plan.
+    Otherwise, select Ridamsub.
+    Return the customer's configured selling price.
+    """
+    network_key = str(network).strip().lower()
+
+    # Check GN Data first.
+    gn_network = GN_DATA_NETWORKS.get(network_key)
+
+    if gn_network:
+        gn_network_id = int(gn_network["network_id"])
+
+        gn_plan = get_plan(
+            plan_id,
+            network_id=gn_network_id,
+        )
+
+        if gn_plan is not None:
+            price = Decimal(str(gn_plan["selling_price"]))
+
+            if not price.is_finite() or price <= 0:
+                raise HTTPException(
+                    status_code=500,
+                    detail="Invalid GN Data selling price configuration.",
+                )
+
+            return {
+                "provider": "gndata",
+                "network_id": gn_network_id,
+                "plan_id": int(gn_plan["plan_id"]),
+                "selling_price": price.quantize(Decimal("0.01")),
+                "plan": gn_plan,
+            }
+
+    # If GN Data does not offer the plan, check Ridamsub.
+    ridamsub_plan = next(
+        (
+            plan
+            for plan in RIDAMSUB_DATA_PLANS.get(network_key, [])
+            if str(plan.get("plan_id")) == str(plan_id)
+            and plan.get("available", True) is True
+        ),
+        None,
+    )
+
+    if ridamsub_plan is not None:
+        try:
+            price = Decimal(str(ridamsub_plan["selling_price"]))
+        except (InvalidOperation, TypeError, ValueError, KeyError):
+            price = None
+
+        if price is not None and price.is_finite() and price > 0:
+            return {
+                "provider": "ridamsub",
+                "network_id": RIDAMSUB_NETWORKS.get(network_key),
+                "plan_id": int(ridamsub_plan["plan_id"]),
+                "selling_price": price.quantize(Decimal("0.01")),
+                "plan": ridamsub_plan,
+            }
+
+    raise HTTPException(
+        status_code=400,
+        detail="Requested data plan is not available from our providers.",
+    )
 
 
 def resolve_purchase_amount(purchase_type, network, plan_id, amount):
-
     """Determine the customer charge before touching the wallet."""
 
     if purchase_type == "airtime":
-
         try:
-
             result = Decimal(str(amount))
-
         except (InvalidOperation, TypeError, ValueError):
-
-            raise HTTPException(status_code=400, detail="Invalid airtime amount.")
-
-
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid airtime amount.",
+            )
 
         if not result.is_finite() or result <= 0:
-
-            raise HTTPException(status_code=400, detail="Invalid airtime amount.")
-
-
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid airtime amount.",
+            )
 
         return result.quantize(Decimal("0.01"))
 
-
-
     if purchase_type != "data":
-
-        raise HTTPException(status_code=400, detail="Unsupported purchase type.")
-
-
-
-    network_key = network.strip().lower()
-
-    matched_price = None
-
-
-
-    for plan in RIDAMSUB_DATA_PLANS.get(network_key, []):
-
-        if str(plan.get("plan_id")) == str(plan_id):
-
-            try:
-
-                matched_price = Decimal(str(plan.get("selling_price")))
-
-            except (InvalidOperation, TypeError, ValueError):
-
-                matched_price = None
-
-            break
-
-
-
-    if (
-
-        matched_price is None
-
-        or not matched_price.is_finite()
-
-        or matched_price <= 0
-
-    ):
-
         raise HTTPException(
-
             status_code=400,
-
-            detail="Requested data plan configuration not found.",
-
+            detail="Unsupported purchase type.",
         )
 
+    selection = resolve_data_provider_and_price(network, plan_id)
+
+    return selection["selling_price"]
 
 
-    return matched_price.quantize(Decimal("0.01"))
 
 
 
-
-
-def apply_provider_result(reference, provider_status):
+def apply_provider_result(reference, provider_status, gateway="ridamsub"):
 
     """
 
@@ -920,7 +983,7 @@ def apply_provider_result(reference, provider_status):
 
                 WalletTransaction.reference == reference,
 
-                WalletTransaction.gateway == "ridamsub",
+                WalletTransaction.gateway == gateway,
 
             )
 
@@ -1062,6 +1125,7 @@ async def query_ridamsub_status(purchase_type, reference):
 
     Confirm the provider's documented status endpoint before production use.
 
+
     """
 
     if purchase_type not in {"airtime", "data"}:
@@ -1128,189 +1192,205 @@ async def query_ridamsub_status(purchase_type, reference):
 
         return PENDING_REQUERY
 
+async def query_gndata_status(request_id):
+
+    """
+
+    Query GN Data transaction status only.
+    Never creates or repeats a purchase.
+    """
+
+    if not isinstance(request_id, str) or not request_id.strip():
+        return PENDING_REQUERY
+
+    try:
+        client = GNDataClient()
+
+        response_json = await client.transaction_status(
+            request_id
+        )
+
+        return normalize_gndata_status(response_json)
+
+    except GNDataError:
+        logger.exception(
+            "GN Data status query failed for request ID %s",
+            request_id,
+        )
+        return PENDING_REQUERY
+
+    except Exception:
+        logger.exception(
+            "Unexpected GN Data status query error for %s",
+            request_id,
+        )
+        return PENDING_REQUERY
+
+
 
 
 
 
 async def reconcile_pending_transaction(reference, expected_type, user_id=None):
-
     """
-
     Reconcile a transaction after an uncertain outcome.
 
-    No automatic purchase retry is performed.
-
+    Status checks only. Never repeats a purchase.
     """
-
     db = SessionLocal()
 
-
-
     try:
-
         tx = (
-
             db.query(WalletTransaction)
-
             .filter(
-
                 WalletTransaction.reference == reference,
-
-                WalletTransaction.gateway == "ridamsub",
-
                 WalletTransaction.transaction_type
-
                 == f"{expected_type}_purchase",
-
             )
-
             .first()
-
         )
 
-
-
-        if tx is None or (user_id is not None and tx.user_id != user_id):
-
+        if tx is None or (
+            user_id is not None and tx.user_id != user_id
+        ):
             return {"status": "not_found"}
 
-
-
         if tx.status in {"success", "failed"}:
-
             return {"status": tx.status}
 
-
+        gateway = tx.gateway
+        provider_request_id = tx.provider_transaction_id
 
     finally:
-
         db.close()
 
+    if gateway == "ridamsub":
+        provider_status = await query_ridamsub_status(
+            expected_type, reference
+        )
+        result = apply_provider_result(reference, provider_status)
 
+    elif gateway == "gndata":
+        if not provider_request_id:
+            return {"status": PENDING_REQUERY}
 
-    provider_status = await query_ridamsub_status(
+        provider_status = await query_gndata_status(
+            provider_request_id
+        )
+        result = apply_provider_result(
+            reference,
+            provider_status,
+            gateway="gndata",
+        )
 
-        expected_type, reference
+    else:
+        logger.error(
+            "Unsupported gateway %s for reference %s",
+            gateway,
+            reference,
+        )
+        return {"status": PENDING_REQUERY}
 
-    )
-
-
-
-    result = apply_provider_result(reference, provider_status)
-
-
-
-    # Recheck the transaction type and ownership before exposing results.
-
+    # Recheck ownership, transaction type, and gateway.
     if user_id is not None:
-
         check_db = SessionLocal()
-
         try:
-
             check = (
-
                 check_db.query(WalletTransaction)
-
-                .filter(WalletTransaction.reference == reference)
-
+                .filter(
+                    WalletTransaction.reference == reference
+                )
                 .first()
-
             )
 
             if (
-
                 check is None
-
                 or check.user_id != user_id
-
-                or check.transaction_type != f"{expected_type}_purchase"
-
+                or check.transaction_type
+                != f"{expected_type}_purchase"
+                or check.gateway != gateway
             ):
-
                 return {"status": "not_found"}
 
         finally:
-
             check_db.close()
-
-
 
     return result
 
 
 
 
-
 async def background_reconcile(reference, expected_type):
-
     """
-
     Retry transaction STATUS CHECKS only.
-
     Never submit another purchase request.
-
     """
-
     for attempt in range(3):
-
         try:
-
             result = await reconcile_pending_transaction(
-
                 reference, expected_type
-
             )
-
-
 
             if result.get("status") != PENDING_REQUERY:
-
                 logger.info(
-
-                    "Ridamsub reconciliation completed for %s: %s",
-
+                    "Provider reconciliation completed for %s: %s",
                     reference,
-
                     result.get("status"),
-
                 )
-
                 return result
 
-
-
         except Exception:
-
             logger.exception(
-
-                "Ridamsub reconciliation attempt %s failed for %s",
-
+                "Provider reconciliation attempt %s failed for %s",
                 attempt + 1,
-
                 reference,
-
             )
 
-
-
         if attempt < 2:
-
             await asyncio.sleep(2 ** attempt)
 
-
-
     logger.warning(
-
-        "Ridamsub transaction remains pending: %s",
-
+        "Provider transaction remains pending: %s",
         reference,
-
     )
 
-
-
     return {"status": PENDING_REQUERY}
+
+def generate_purchase_fingerprint(
+    purchase_type: str,
+    network: str,
+    phone: str,
+    amount: Decimal,
+    gateway: str,
+    plan_id: int | None = None,
+    airtime_type: str = "VTU",
+) -> str:
+    """Generate a stable SHA-256 fingerprint for a purchase request."""
+
+    purchase_details = {
+        "purchase_type": str(purchase_type).strip().lower(),
+        "network": str(network).strip().lower(),
+        "phone": str(phone).strip(),
+        "amount": format(
+            Decimal(str(amount)).quantize(Decimal("0.01")),
+            "f",
+        ),
+        "gateway": str(gateway).strip().lower(),
+        "plan_id": int(plan_id) if plan_id is not None else None,
+        "airtime_type": str(airtime_type).strip().upper(),
+    }
+
+    canonical_request = json.dumps(
+        purchase_details,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    )
+
+    return hashlib.sha256(
+        canonical_request.encode("utf-8")
+    ).hexdigest()
+
 
 
 
@@ -1436,6 +1516,98 @@ async def execute_ridamsub_purchase(
 
 
 
+    provider_cost = None
+
+    if purchase_type == "airtime":
+        ridamsub_airtime_rates = {
+            "mtn": Decimal("0.98"),
+            "glo": Decimal("0.99"),
+            "9mobile": Decimal("0.98"),
+            "airtel": Decimal("0.99"),
+        }
+
+        rate = ridamsub_airtime_rates.get(network_key)
+
+        if rate is not None:
+            calculated_cost = (
+                Decimal(str(final_amount)) * rate
+            ).quantize(Decimal("0.01"))
+
+            if calculated_cost.is_finite() and calculated_cost > 0:
+                provider_cost = calculated_cost
+
+    elif purchase_type == "data":
+        ridamsub_plan = next(
+            (
+                plan
+                for plan in RIDAMSUB_DATA_PLANS.get(network_key, [])
+                if str(plan.get("plan_id")) == str(plan_id)
+                and plan.get("available", True) is True
+            ),
+            None,
+        )
+
+        if ridamsub_plan is None:
+            raise HTTPException(
+                status_code=400,
+                detail="Ridamsub data plan not found.",
+            )
+
+        try:
+            provider_cost = Decimal(
+                str(ridamsub_plan["provider_cost"])
+            ).quantize(Decimal("0.01"))
+        except (InvalidOperation, TypeError, ValueError, KeyError):
+            raise HTTPException(
+                status_code=500,
+                detail="Invalid Ridamsub provider cost configuration.",
+            )
+
+        if not provider_cost.is_finite() or provider_cost <= 0:
+            raise HTTPException(
+                status_code=500,
+                detail="Invalid Ridamsub provider cost configuration.",
+            )
+
+        if (
+            provider_cost is None
+            or not provider_cost.is_finite()
+            or provider_cost <= 0
+        ):
+            raise HTTPException(
+            status_code=500,
+            detail="Unable to determine a valid provider cost. Purchase was not submitted.",
+        )
+
+
+
+        if (
+            provider_cost is None
+            or not provider_cost.is_finite()
+            or provider_cost <= 0
+        ):
+            raise HTTPException(
+                status_code=500,
+                detail=(
+                    "Unable to determine a valid provider cost. "
+                    "Purchase was not submitted."
+            ),
+        )
+
+
+
+    request_fingerprint = generate_purchase_fingerprint(
+        purchase_type=purchase_type,
+        network=network_key,
+        phone=phone,
+        amount=final_amount,
+        gateway="ridamsub",
+        plan_id=plan_id,
+        airtime_type=airtime_type,
+    )
+
+
+
     local_ref = (
 
         f"OMOTECH_{purchase_type.upper()}_{secrets.token_hex(12)}"
@@ -1499,45 +1671,34 @@ async def execute_ridamsub_purchase(
         if existing_tx:
 
             if (
-
-                existing_tx.transaction_type
-
-                != f"{purchase_type}_purchase"
-
-                or Decimal(str(existing_tx.amount)) != final_amount
+               existing_tx.gateway != "ridamsub"
+               or not existing_tx.request_fingerprint
+               or existing_tx.request_fingerprint != request_fingerprint
 
             ):
+               raise HTTPException(
+                   status_code=409,
+                   detail=(
+                       "This idempotency key was already used for a "
+                       "different or unverifiable purchase. "
+                       "Use a new idempotency key."
+                    ),
+            )
 
-                raise HTTPException(
-
-                    status_code=409,
-
-                    detail="This idempotency key was already used for a different purchase.",
-
-                )
-
-
-
-            return {
-
+            existing_result = {
                 "reference": existing_tx.reference,
-
                 "transaction_type": existing_tx.transaction_type,
-
                 "amount": str(existing_tx.amount),
-
                 "status": existing_tx.status,
-
                 "message": (
-
                     "This purchase request has already been recorded. "
-
                     "Do not submit it again."
-
-                ),
-
+                 ),
             }
 
+            db.rollback()
+
+            return existing_result
 
 
         current_balance = Decimal(str(user.wallet_balance))
@@ -1568,6 +1729,8 @@ async def execute_ridamsub_purchase(
 
             amount=final_amount,
 
+            provider_cost=provider_cost,
+
             status="pending",
 
             reference=local_ref,
@@ -1575,6 +1738,7 @@ async def execute_ridamsub_purchase(
             gateway="ridamsub",
 
             idempotency_key=idempotency_key,
+            request_fingerprint=request_fingerprint,
 
         )
 
@@ -1855,6 +2019,305 @@ async def execute_ridamsub_purchase(
         ),
 
     }
+
+
+
+async def execute_gndata_purchase(
+    db: Session,
+    user_id: int,
+    network: str,
+    phone: str,
+    idempotency_key: str,
+    plan_id: int,
+    background_tasks: BackgroundTasks | None = None,
+):
+    """
+    Execute one GN Data purchase using the configured selling price.
+
+    The customer is charged only the configured selling_price.
+    An uncertain provider response remains pending and is never
+    automatically retried through another provider.
+    """
+
+    if not isinstance(idempotency_key, str) or not idempotency_key.strip():
+        raise HTTPException(
+            status_code=400,
+            detail="An idempotency key is required.",
+        )
+
+    network_key = str(network).strip().lower()
+    gn_network = GN_DATA_NETWORKS.get(network_key)
+
+    if not gn_network:
+        raise HTTPException(
+            status_code=400,
+            detail="Unsupported GN Data network.",
+        )
+
+    network_id = int(gn_network["network_id"])
+
+    plan = get_plan(plan_id, network_id=network_id)
+
+    if plan is None:
+        raise HTTPException(
+            status_code=400,
+            detail="GN Data plan not found.",
+        )
+
+    final_amount = Decimal(str(plan["selling_price"])).quantize(
+        Decimal("0.01")
+    )
+
+
+    provider_cost = Decimal(str(plan["provider_cost"])).quantize(
+        Decimal("0.01")
+    )
+
+    if not provider_cost.is_finite() or provider_cost <= 0:
+        raise HTTPException(
+            status_code=500,
+            detail="Invalid GN Data provider cost.",
+        )
+
+    if not final_amount.is_finite() or final_amount <= 0:
+        raise HTTPException(
+            status_code=500,
+            detail="Invalid GN Data selling price.",
+        )
+
+
+    request_fingerprint = generate_purchase_fingerprint(
+
+    purchase_type="data",
+    network=network_key,
+    phone=phone,
+    amount=final_amount,
+    gateway="gndata",
+    plan_id=int(plan["plan_id"]),
+)
+
+
+
+
+    client = GNDataClient()
+
+    if not client.enabled:
+        raise HTTPException(
+            status_code=503,
+            detail="GN Data is currently unavailable.",
+        )
+
+    if not client.api_key:
+        raise HTTPException(
+            status_code=503,
+            detail="GN Data credentials are not configured.",
+        )
+
+    local_ref = f"OMOTECH_DATA_{secrets.token_hex(12)}"
+
+    try:
+        user = (
+            db.query(User)
+            .filter(User.id == user_id)
+            .with_for_update()
+            .first()
+        )
+
+        if user is None:
+            raise HTTPException(
+                status_code=404,
+                detail="Customer account not found.",
+            )
+
+        existing = (
+            db.query(WalletTransaction)
+            .filter(
+                WalletTransaction.user_id == user_id,
+                WalletTransaction.idempotency_key == idempotency_key,
+            )
+            .first()
+        )
+
+        if existing:
+            if (
+                existing.transaction_type != "data_purchase"
+                or Decimal(str(existing.amount)) != final_amount
+                or existing.gateway != "gndata"
+                or not existing.request_fingerprint
+                or existing.request_fingerprint != request_fingerprint
+         ):
+                raise HTTPException(
+                    status_code=409,
+                    detail="Idempotency key was already used for another transaction.",
+                )
+
+            existing_result = {
+                "reference": existing.reference,
+                "status": existing.status,
+                "amount": float(existing.amount),
+                "message": "Existing transaction returned. Do not retry.",
+            }
+
+            db.rollback()
+
+            return existing_result
+
+        if Decimal(str(user.wallet_balance)) < final_amount:
+            raise HTTPException(
+                status_code=400,
+                detail="Insufficient wallet balance.",
+            )
+
+        user.wallet_balance = (
+            Decimal(str(user.wallet_balance)) - final_amount
+        )
+
+        transaction = WalletTransaction(
+            user_id=user_id,
+            transaction_type="data_purchase",
+            amount=final_amount,
+            provider_cost=provider_cost,
+            status="pending",
+            reference=local_ref,
+            gateway="gndata",
+            idempotency_key=idempotency_key,
+            request_fingerprint=request_fingerprint,
+        )
+
+        db.add(transaction)
+        db.commit()
+        db.refresh(transaction)
+
+    except HTTPException:
+        db.rollback()
+        raise
+
+    except Exception:
+        db.rollback()
+        logger.exception("Could not reserve wallet funds for GN Data.")
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to initiate data purchase.",
+        )
+
+    provider_status = PENDING_REQUERY
+    provider_reference = None
+
+    try:
+        response_json = await client.purchase_data(
+            phone=phone,
+            network_id=network_id,
+            plan_id=int(plan["plan_id"]),
+            idempotency_key=idempotency_key,
+        )
+
+        provider_reference = (
+            response_json.get("request_id")
+            or response_json.get("transaction_id")
+            or response_json.get("id")
+        )
+
+        provider_status = normalize_gndata_status(response_json)
+
+        transaction.provider_transaction_id = (
+            str(provider_reference) if provider_reference else None
+        )
+
+        db.commit()
+
+    except GNDataError:
+        logger.exception(
+            "GN Data purchase response uncertain for %s",
+            local_ref,
+        )
+        provider_status = PENDING_REQUERY
+
+    except Exception:
+        logger.exception(
+            "Unexpected GN Data purchase error for %s",
+            local_ref,
+        )
+        provider_status = PENDING_REQUERY
+
+    result = apply_provider_result(
+        local_ref,
+        provider_status,
+        gateway="gndata",
+    )
+
+    if result.get("status") == PENDING_REQUERY and background_tasks:
+        if provider_reference:
+            background_tasks.add_task(
+                background_reconcile,
+                local_ref,
+                "data",
+            )
+
+    return {
+        "reference": local_ref,
+        "transaction_type": "data",
+        "amount": float(final_amount),
+        "status": result.get("status", PENDING_REQUERY),
+        "message": (
+            "Data purchase successful."
+            if result.get("status") == "success"
+            else "Purchase is being verified. Do not retry."
+        ),
+    }
+
+
+
+
+async def execute_data_purchase(
+    db: Session,
+    user_id: int,
+    network: str,
+    phone: str,
+    idempotency_key: str,
+    plan_id: int,
+    background_tasks: BackgroundTasks | None = None,
+):
+    """
+    Automatically select GN Data or Ridamsub before
+    reserving wallet funds or submitting a purchase.
+    """
+
+    selection = resolve_data_provider_and_price(
+        network,
+        plan_id,
+    )
+
+    provider = selection["provider"]
+
+    if provider == "gndata":
+        return await execute_gndata_purchase(
+            db=db,
+            user_id=user_id,
+            network=network,
+            phone=phone,
+            idempotency_key=idempotency_key,
+            plan_id=selection["plan_id"],
+            background_tasks=background_tasks,
+        )
+
+    if provider == "ridamsub":
+        return await execute_ridamsub_purchase(
+            db=db,
+            user_id=user_id,
+            purchase_type="data",
+            network=network,
+            phone=phone,
+            idempotency_key=idempotency_key,
+            plan_id=selection["plan_id"],
+            background_tasks=background_tasks,
+        )
+
+    raise HTTPException(
+        status_code=400,
+        detail="No provider is available for this data plan.",
+    )
+
+
 
 
 
@@ -2458,7 +2921,6 @@ async def verify_airtime_purchase(
 
             WalletTransaction.user_id == current_user.id,
 
-            WalletTransaction.gateway == "ridamsub",
 
             WalletTransaction.transaction_type == "airtime_purchase",
 
@@ -2528,7 +2990,6 @@ async def verify_data_purchase(
 
             WalletTransaction.user_id == current_user.id,
 
-            WalletTransaction.gateway == "ridamsub",
 
             WalletTransaction.transaction_type == "data_purchase",
 
@@ -2705,84 +3166,48 @@ def home():
 
 
 @app.post("/user")
-
 def create_user(
-
     user_data: UserCreate,
-
     db: Session = Depends(get_db)
-
 ):
-
-
+    submitted_phone = user_data.phone.strip()
+    phone_hash = hash_phone_number(submitted_phone)
 
     existing_user = db.query(User).filter(
-
-        User.phone == user_data.phone
-
+        (User.phone_hash == phone_hash) |
+        (User.phone == submitted_phone)
     ).first()
 
-
-
     if existing_user:
-
-
-
         raise HTTPException(
-
             status_code=400,
-
             detail="Phone number already registered"
-
         )
 
-
-
-    hashed_password = password_hash.hash(
-
-        user_data.password
-
-    )
-
-
+    hashed_password = password_hash.hash(user_data.password)
 
     new_user = User(
-
         name=user_data.name,
-
-        phone=user_data.phone,
-
+        phone=encrypt_phone_number(submitted_phone),
+        phone_hash=phone_hash,
         email=user_data.email,
-
         password_hash=hashed_password
-
     )
 
-
-
     db.add(new_user)
-
     db.commit()
-
     db.refresh(new_user)
 
-
-
     return {
-
         "message": "User created successfully",
-
         "id": new_user.id,
-
         "name": new_user.name,
-
-        "phone": new_user.phone,
-
+        "phone": decrypt_phone_number(new_user.phone),
         "email": new_user.email,
-
         "created_at": new_user.created_at
-
     }
+
+
 
 
 
@@ -2795,86 +3220,60 @@ def create_user(
 
 
 @app.post("/login")
-
 def login(
-
     login_data: LoginRequest,
-
     db: Session = Depends(get_db)
-
 ):
+    submitted_phone = login_data.phone.strip()
+    phone_hash = hash_phone_number(submitted_phone)
 
-
-
+    # First, search encrypted customer records.
     user = db.query(User).filter(
-
-        User.phone == login_data.phone
-
+        User.phone_hash == phone_hash
     ).first()
 
-
+    # Support existing records that are still plaintext.
+    if not user:
+        user = db.query(User).filter(
+            User.phone == submitted_phone,
+            User.phone_hash.is_(None)
+        ).first()
 
     if not user or not user.password_hash:
-
-
-
         raise HTTPException(
-
             status_code=401,
-
             detail="Invalid phone number or password"
-
         )
-
-
 
     password_is_correct = password_hash.verify(
-
         login_data.password,
-
         user.password_hash
-
     )
-
-
 
     if not password_is_correct:
-
-
-
         raise HTTPException(
-
             status_code=401,
-
             detail="Invalid phone number or password"
-
         )
 
+    # Upgrade an existing plaintext record after successful login.
+    if not user.phone_hash:
+        user.phone_hash = phone_hash
+        user.phone = encrypt_phone_number(submitted_phone)
+        db.commit()
+        db.refresh(user)
 
-
-    access_token = create_access_token(
-
-        user.id
-
-    )
-
-
+    access_token = create_access_token(user.id)
 
     return {
-
         "message": "Login successful",
-
         "access_token": access_token,
-
         "token_type": "bearer",
-
         "id": user.id,
-
         "name": user.name,
-
-        "phone": user.phone
-
+        "phone": decrypt_phone_number(user.phone)
     }
+
 
 
 
@@ -2943,38 +3342,6 @@ def admin_login(
     access_token = create_admin_access_token(admin.id)
 
 
-
-
-
-
-
-    try:
-
-        db.add(
-
-            AdminAuditLog(
-
-                admin_id=admin.id,
-
-                action="admin_login",
-
-                reason="Admin logged in successfully."
-
-            )
-
-        )
-
-        db.commit()
-
-    except Exception as e:
-
-        db.rollback()
-
-        print("ADMIN LOGIN AUDIT ERROR:", repr(e))
-
-        # Allow login to succeed even if audit logging fails.
-
-        pass
 
 
 
@@ -3454,12 +3821,16 @@ def forgot_password(
 
 
 
+    submitted_phone = request.phone.strip()
+    phone_hash = hash_phone_number(submitted_phone)
+
     user = db.query(User).filter(
-
-        User.phone == request.phone
-
+        (User.phone_hash == phone_hash) |
+        (
+            (User.phone == submitted_phone) &
+            (User.phone_hash.is_(None))
+        )
     ).first()
-
 
 
     if not user:
@@ -3606,14 +3977,19 @@ def reset_password(
 
 
 
+    submitted_phone = request.phone.strip()
+    phone_hash = hash_phone_number(submitted_phone)
+
     user = db.query(User).filter(
-
         User.id == reset_record.user_id,
-
-        User.phone == request.phone
-
+        (
+            (User.phone_hash == phone_hash) |
+            (
+                (User.phone == submitted_phone) &
+                (User.phone_hash.is_(None))
+            )
+        )
     ).first()
-
 
 
     if not user:
@@ -3635,6 +4011,12 @@ def reset_password(
         request.new_password
 
     )
+
+
+
+    if not user.phone_hash:
+        user.phone_hash = phone_hash
+        user.phone = encrypt_phone_number(submitted_phone)
 
 
 
@@ -3686,7 +4068,7 @@ def get_users(
 
             "name": user.name,
 
-            "phone": user.phone,
+            "phone": decrypt_phone_number(user.phone),
 
             "created_at": user.created_at
 
@@ -3732,7 +4114,7 @@ def admin_get_users(
 
             "email": user.email,
 
-            "phone": user.phone,
+            "phone": decrypt_phone_number(user.phone),
 
             "wallet_balance": float(user.wallet_balance or 0),
 
@@ -3820,7 +4202,7 @@ def admin_get_transactions(
 
             "user_name": user.name if user else None,
 
-            "user_phone": user.phone if user else None,
+            "user_phone": decrypt_phone_number(user.phone) if user else None,
 
             "user_email": user.email if user else None,
 
@@ -3846,6 +4228,108 @@ def admin_get_transactions(
 
     ]
 
+
+
+
+@app.get("/admin/profit-report")
+def admin_profit_report(
+    current_admin: Admin = Depends(get_current_admin),
+    db: Session = Depends(get_db),
+):
+    transactions = (
+        db.query(WalletTransaction)
+        .filter(
+            WalletTransaction.status == "success",
+            WalletTransaction.transaction_type.in_(
+                ["airtime_purchase", "data_purchase"]
+            ),
+            WalletTransaction.gateway.in_(["ridamsub", "gndata"]),
+        )
+        .all()
+    )
+
+    report = {
+        "total_transactions": len(transactions),
+        "total_sales": Decimal("0.00"),
+        "sales_with_known_cost": Decimal("0.00"),
+        "total_provider_cost": Decimal("0.00"),
+        "gross_profit": Decimal("0.00"),
+        "unknown_cost_sales": Decimal("0.00"),
+        "unknown_cost_transactions": 0,
+        "providers": {},
+        "services": {},
+    }
+
+    for tx in transactions:
+        provider = tx.gateway
+        service = (
+            "airtime"
+            if tx.transaction_type == "airtime_purchase"
+            else "data"
+        )
+
+        amount = Decimal(str(tx.amount))
+
+        report["total_sales"] += amount
+
+        if provider not in report["providers"]:
+            report["providers"][provider] = {
+                "sales": Decimal("0.00"),
+                "provider_cost": Decimal("0.00"),
+                "gross_profit": Decimal("0.00"),
+                "unknown_cost_sales": Decimal("0.00"),
+                "unknown_cost_transactions": 0,
+            }
+
+        if service not in report["services"]:
+            report["services"][service] = {
+                "sales": Decimal("0.00"),
+                "provider_cost": Decimal("0.00"),
+                "gross_profit": Decimal("0.00"),
+                "unknown_cost_sales": Decimal("0.00"),
+            }
+
+        provider_row = report["providers"][provider]
+        service_row = report["services"][service]
+
+        provider_row["sales"] += amount
+        service_row["sales"] += amount
+
+        if tx.provider_cost is None:
+            report["unknown_cost_sales"] += amount
+            report["unknown_cost_transactions"] += 1
+
+            provider_row["unknown_cost_sales"] += amount
+            provider_row["unknown_cost_transactions"] += 1
+
+            continue
+
+        cost = Decimal(str(tx.provider_cost))
+        profit = amount - cost
+
+        report["sales_with_known_cost"] += amount
+        report["total_provider_cost"] += cost
+        report["gross_profit"] += profit
+
+        provider_row["provider_cost"] += cost
+        provider_row["gross_profit"] += profit
+
+        service_row["provider_cost"] += cost
+        service_row["gross_profit"] += profit
+
+    def serialize(value):
+        if isinstance(value, Decimal):
+            return float(value)
+
+        if isinstance(value, dict):
+            return {
+                key: serialize(item)
+                for key, item in value.items()
+            }
+
+        return value
+
+    return serialize(report)
 
 
 
@@ -4024,102 +4508,63 @@ def admin_get_audit_logs(
 
 # =========================
 
-
-
-
-
 @app.get("/me")
-
 def get_my_profile(
-
     current_user: User = Depends(get_current_user)
-
 ):
-
     return {
-
         "message": "Authenticated user",
-
         "id": current_user.id,
-
         "name": current_user.name,
-
         "email": current_user.email,
-
-        "phone": current_user.phone,
-
+        "phone": decrypt_phone_number(current_user.phone),
         "created_at": current_user.created_at
-
     }
-
 
 
 @app.put("/profile")
-
 def update_profile(
-
     request: ProfileUpdateRequest,
-
     current_user: User = Depends(get_current_user),
-
     db: Session = Depends(get_db)
-
 ):
+    submitted_phone = request.phone.strip()
+    phone_hash = hash_phone_number(submitted_phone)
 
     existing_phone = db.query(User).filter(
-
-        User.phone == request.phone,
-
-        User.id != current_user.id
-
+        User.id != current_user.id,
+        (
+            (User.phone_hash == phone_hash) |
+            (
+                (User.phone == submitted_phone) &
+                (User.phone_hash.is_(None))
+            )
+        )
     ).first()
 
-
-
     if existing_phone:
-
         raise HTTPException(
-
             status_code=409,
-
             detail="This phone number is already in use."
-
         )
 
-
-
     current_user.name = request.name.strip()
-
     current_user.email = str(request.email).strip().lower()
-
-    current_user.phone = request.phone.strip()
-
-
+    current_user.phone = encrypt_phone_number(submitted_phone)
+    current_user.phone_hash = phone_hash
 
     db.commit()
-
     db.refresh(current_user)
 
-
-
     return {
-
         "message": "Profile updated successfully.",
-
         "user": {
-
             "id": current_user.id,
-
             "name": current_user.name,
-
             "email": current_user.email,
-
-            "phone": current_user.phone
-
+            "phone": decrypt_phone_number(current_user.phone)
         }
-
     }
-
 
 
 
@@ -4156,7 +4601,7 @@ APPROVED_DATA_PLANS = {
 
         "mtn-50mb-200": {
 
-            "name": "MTN 200MB — 2 days",
+            "name": "MTN 200MB â€” 2 days",
 
             "selling_price": 230,
 
@@ -4164,7 +4609,7 @@ APPROVED_DATA_PLANS = {
 
         "mtn-2-5gb-600": {
 
-            "name": "MTN 2.5GB — 2 days",
+            "name": "MTN 2.5GB â€” 2 days",
 
             "selling_price": 680,
 
@@ -4172,7 +4617,7 @@ APPROVED_DATA_PLANS = {
 
         "mtn-3gb-1500": {
 
-            "name": "MTN 3GB — 30 days",
+            "name": "MTN 3GB â€” 30 days",
 
             "selling_price": 1600,
 
@@ -4180,7 +4625,7 @@ APPROVED_DATA_PLANS = {
 
         "mtn-3gb-2500": {
 
-            "name": "MTN 6GB — 30 days",
+            "name": "MTN 6GB â€” 30 days",
 
             "selling_price": 2750,
 
@@ -4188,7 +4633,7 @@ APPROVED_DATA_PLANS = {
 
         "mtn-data-3000": {
 
-            "name": "MTN 8GB — 30 days",
+            "name": "MTN 8GB â€” 30 days",
 
             "selling_price": 3310,
 
@@ -4196,7 +4641,7 @@ APPROVED_DATA_PLANS = {
 
         "mtn-1gb-3500": {
 
-            "name": "MTN 10GB — 30 days",
+            "name": "MTN 10GB â€” 30 days",
 
             "selling_price": 3740,
 
@@ -4204,7 +4649,7 @@ APPROVED_DATA_PLANS = {
 
         "mtn-100hr-5000": {
 
-            "name": "MTN 15GB — 30 days",
+            "name": "MTN 15GB â€” 30 days",
 
             "selling_price": 5250,
 
@@ -4212,7 +4657,7 @@ APPROVED_DATA_PLANS = {
 
         "mtn-3gb-6000": {
 
-            "name": "MTN 20GB — 30 days",
+            "name": "MTN 20GB â€” 30 days",
 
             "selling_price": 6300,
 
@@ -4220,7 +4665,7 @@ APPROVED_DATA_PLANS = {
 
         "mtn-40gb-10000": {
 
-            "name": "MTN 40GB — 30 days",
+            "name": "MTN 40GB â€” 30 days",
 
             "selling_price": 10500,
 
@@ -4234,132 +4679,142 @@ APPROVED_DATA_PLANS = {
 
 
 
+@app.get("/gndata/data/plans/{network}")
+def get_gndata_data_plans(network: str):
+    network_key = network.strip().lower()
+
+    network_info = GN_DATA_NETWORKS.get(network_key)
+
+    if network_info is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Unsupported GN Data network.",
+        )
+
+    network_id = network_info["network_id"]
+    plans = get_network_plans(network_id)
+
+    customer_plans = []
+
+    for plan in plans:
+        customer_plans.append({
+            "variation_code": str(plan["plan_id"]),
+            "plan_id": plan["plan_id"],
+            "name": plan["name"],
+            "price": str(plan["selling_price"]),
+            "validity": plan.get("validity", "Not specified"),
+            "type": plan.get("plan_type", "Data"),
+        })
+
+    return {
+        "network": network_key,
+        "network_id": network_id,
+        "plans": customer_plans,
+    }
+
+
 @app.get("/data/plans/{network}")
-
 def get_data_plans(network: str):
+    network_key = str(network).strip().lower()
 
-    return get_ridamsub_data_plans(network)
+    if network_key not in GN_DATA_NETWORKS:
+        raise HTTPException(
+            status_code=400,
+            detail="Unsupported network.",
+        )
 
+    plans = []
+    seen_plan_ids = set()
 
+    # GN Data plans take priority.
+    gn_network = GN_DATA_NETWORKS[network_key]
+    gn_network_id = int(gn_network["network_id"])
+
+    for plan in get_network_plans(gn_network_id):
+        plans.append({
+            "plan_id": plan["plan_id"],
+            "name": plan["name"],
+            "validity": plan["validity"],
+            "plan_type": plan["plan_type"],
+            "selling_price": float(plan["selling_price"]),
+            "provider": "gndata",
+        })
+        seen_plan_ids.add(str(plan["plan_id"]))
+
+    # Add Ridamsub plans not already supplied by GN Data.
+    for plan in RIDAMSUB_DATA_PLANS.get(network_key, []):
+        plan_id = str(plan.get("plan_id"))
+
+        if plan_id in seen_plan_ids:
+            continue
+
+        if plan.get("available", True) is not True:
+            continue
+
+        plans.append({
+            "plan_id": plan["plan_id"],
+            "name": plan["name"],
+            "validity": plan["validity"],
+            "selling_price": float(Decimal(str(plan["selling_price"]))),
+            "provider": "ridamsub",
+        })
+        seen_plan_ids.add(plan_id)
+
+    return {
+        "network": network_key,
+        "plans": plans,
+    }
 
 
 
 def validate_idempotency_key(value: str | None) -> str:
-
     """Validate and normalize an incoming Idempotency-Key header."""
 
     if not isinstance(value, str):
-
         raise HTTPException(
-
             status_code=400,
-
             detail="An Idempotency-Key header is required.",
-
         )
-
-
 
     key = value.strip()
 
-
-
-    if not key or len(key) > 200:
-
+    if not key or len(key) > 100:
         raise HTTPException(
-
             status_code=400,
-
             detail="A valid Idempotency-Key is required.",
-
         )
-
-
 
     return key
 
 
-
-
-
-# =========================
-
-# DATA AND AIRTIME PURCHASE
-
-# =========================
-
-
-
 @app.post("/data/purchase")
-
 async def purchase_data(
-
     request: DataPurchaseRequest,
-
     current_user: User = Depends(get_current_user),
-
     db: Session = Depends(get_db),
-
     idempotency_key: str | None = Header(
-
         default=None, alias="Idempotency-Key"
-
     ),
-
     background_tasks: BackgroundTasks = None,
-
 ):
-
     key = validate_idempotency_key(idempotency_key)
 
-
-
-    if not RIDAMSUB_PURCHASES_ENABLED:
-
-        raise HTTPException(
-
-            status_code=503,
-
-            detail="Data purchases are temporarily disabled."
-
-        )
-
-
-
     try:
-
         plan_id = int(request.variation_code)
-
     except (TypeError, ValueError):
-
         raise HTTPException(
-
             status_code=400,
-
             detail="Invalid data plan ID."
-
         )
 
-
-
-    return await execute_ridamsub_purchase(
-
+    return await execute_data_purchase(
         db=db,
-
         user_id=current_user.id,
-
-        purchase_type="data",
-
         network=request.network,
-
         phone=request.phone,
-
         plan_id=plan_id,
-
         idempotency_key=key,
-
         background_tasks=background_tasks,
-
     )
 
 

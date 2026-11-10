@@ -470,6 +470,39 @@
                 </div>
 
                 <div class="panel">
+    <div class="panel-header">
+        <h2>Business Profit Report</h2>
+        <button class="button secondary" onclick="loadProfitReport()">
+            Refresh Profit
+        </button>
+    </div>
+
+    <div class="stats">
+        <article class="stat-card">
+            <div class="stat-label">Total Sales</div>
+            <div class="stat-value" id="profitSales">₦0.00</div>
+        </article>
+
+        <article class="stat-card">
+            <div class="stat-label">Provider Costs</div>
+            <div class="stat-value" id="profitCosts">₦0.00</div>
+        </article>
+
+        <article class="stat-card">
+            <div class="stat-label">Gross Profit</div>
+            <div class="stat-value" id="grossProfit">₦0.00</div>
+        </article>
+
+        <article class="stat-card">
+            <div class="stat-label">Sales With Unknown Costs</div>
+            <div class="stat-value" id="unknownCostSales">₦0.00</div>
+        </article>
+    </div>
+
+    <div id="profitBreakdown"></div>
+</div>
+
+                <div class="panel">
                     <div class="panel-header">
                         <h2>Recent Transactions</h2>
                         <button class="button secondary" data-go="transactions">
@@ -958,12 +991,100 @@
             renderUsers();
         }
 
+
+        async function loadProfitReport() {
+    try {
+        const report = await api("/admin/profit-report");
+
+        document.getElementById("profitSales").textContent =
+            formatMoney(report.total_sales);
+
+        document.getElementById("profitCosts").textContent =
+            formatMoney(report.total_provider_cost);
+
+        document.getElementById("grossProfit").textContent =
+            formatMoney(report.gross_profit);
+
+        document.getElementById("unknownCostSales").textContent =
+            formatMoney(report.unknown_cost_sales);
+
+        const providers = report.providers || {};
+        const services = report.services || {};
+
+        let html = `
+            <h3>Provider Breakdown</h3>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Provider</th>
+                        <th>Sales</th>
+                        <th>Provider Cost</th>
+                        <th>Gross Profit</th>
+                        <th>Unknown Cost Sales</th>
+                    </tr>
+                </thead>
+                <tbody>
+        `;
+
+        for (const [name, item] of Object.entries(providers)) {
+            html += `
+                <tr>
+                    <td>${escapeHtml(name)}</td>
+                    <td>${formatMoney(item.sales)}</td>
+                    <td>${formatMoney(item.provider_cost)}</td>
+                    <td>${formatMoney(item.gross_profit)}</td>
+                    <td>${formatMoney(item.unknown_cost_sales)}</td>
+                </tr>
+            `;
+        }
+
+        html += `
+                </tbody>
+            </table>
+
+            <h3>Service Breakdown</h3>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Service</th>
+                        <th>Sales</th>
+                        <th>Provider Cost</th>
+                        <th>Gross Profit</th>
+                    </tr>
+                </thead>
+                <tbody>
+        `;
+
+        for (const [name, item] of Object.entries(services)) {
+            html += `
+                <tr>
+                    <td>${escapeHtml(name)}</td>
+                    <td>${formatMoney(item.sales)}</td>
+                    <td>${formatMoney(item.provider_cost)}</td>
+                    <td>${formatMoney(item.gross_profit)}</td>
+                </tr>
+            `;
+        }
+
+        html += "</tbody></table>";
+
+        document.getElementById("profitBreakdown").innerHTML = html;
+
+    } catch (error) {
+        console.error("Profit report loading failed:", error);
+        document.getElementById("profitBreakdown").textContent =
+            "Unable to load profit report. Please refresh.";
+    }
+}
+
         async function loadTransactions() {
             const data = await api("/admin/transactions");
             transactions = getArray(data, ["transactions", "items", "results"]);
 
             renderTransactions(transactions, "transactionsTable");
             renderTransactions(transactions, "recentTransactions", 5);
+
+            await loadProfitReport();
         }
 
         async function loadProfile() {

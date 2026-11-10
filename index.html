@@ -593,48 +593,69 @@
 
 </div>
 
-
 <div class="card hidden" id="airtimeCard">
     <h2>Buy Airtime</h2>
 
-    <label for="airtimeNetwork">Select Network</label>
-    <select id="airtimeNetwork">
-        <option value="">Choose a network</option>
-        <option value="MTN">MTN</option>
-        <option value="Airtel">Airtel</option>
-        <option value="Glo">Glo</option>
-        <option value="9mobile">9mobile</option>
-    </select>
+    <div id="airtimePurchaseForm">
+        <label for="airtimeNetwork">Select Network</label>
+        <select id="airtimeNetwork">
+            <option value="">Choose a network</option>
+            <option value="MTN">MTN</option>
+            <option value="Airtel">Airtel</option>
+            <option value="Glo">Glo</option>
+            <option value="9mobile">9mobile</option>
+        </select>
 
-    <label for="airtimePhone">Phone Number</label>
-    <input
-        type="tel"
-        id="airtimePhone"
-        placeholder="Enter phone number"
-        maxlength="11"
-    >
+        <label for="airtimePhone">Phone Number</label>
+        <input
+            type="tel"
+            id="airtimePhone"
+            placeholder="Enter phone number"
+            maxlength="11"
+        >
 
-    <label for="airtimeAmount">Amount (₦)</label>
-    <input
-        type="number"
-        id="airtimeAmount"
-        placeholder="Enter amount"
-        min="50"
-        step="1"
-    >
+        <label for="airtimeAmount">Amount (₦)</label>
+        <input
+            type="number"
+            id="airtimeAmount"
+            placeholder="Enter amount"
+            min="50"
+            step="1"
+        >
 
-    <button type="button" onclick="buyAirtime()">Buy Airtime</button>
+        <button type="button" onclick="buyAirtime()">Buy Airtime</button>
 
-    <p id="airtimeMessage"></p>
+        <p id="airtimeMessage"></p>
 
-    <button
-        type="button"
-        class="secondary-button"
-        onclick="showDashboardFromAirtime()"
-    >
-        Back to Dashboard
-    </button>
+        <button
+            type="button"
+            class="secondary-button"
+            onclick="showDashboardFromAirtime()"
+        >
+            Back to Dashboard
+        </button>
+    </div>
+
+    <div id="airtimeReceipt" class="hidden">
+        <h3 id="airtimeReceiptTitle">Airtime Purchase Result</h3>
+        <p id="airtimeReceiptStatus"></p>
+        <p id="airtimeReceiptNetwork"></p>
+        <p id="airtimeReceiptPhone"></p>
+        <p id="airtimeReceiptAmount"></p>
+        <p id="airtimeReceiptReference"></p>
+        <p id="airtimeReceiptMessage"></p>
+
+        <button
+            type="button"
+            class="secondary-button"
+            onclick="showDashboardFromAirtime()"
+        >
+            Back to Dashboard
+        </button>
+    </div>
 </div>
+
+
 
 <div class="card hidden" id="walletCard">
     <h2>My Wallet</h2>
@@ -737,6 +758,8 @@
 
         let dataPurchaseInProgress = false;
         let dataPurchaseNeedsVerification = false;
+        let airtimePurchaseInProgress = false;
+        let airtimePurchaseNeedsVerification = false;
 
         // =========================
         // LOGIN
@@ -1109,9 +1132,31 @@ function showDashboardFromWallet() {
 }
 
 function showAirtime() {
+    const purchaseForm = document.getElementById("airtimePurchaseForm");
+    const receipt = document.getElementById("airtimeReceipt");
+    const message = document.getElementById("airtimeMessage");
+    const button = purchaseForm.querySelector('button[onclick="buyAirtime()"]');
+
+    if (airtimePurchaseInProgress) {
+        purchaseForm.classList.remove("hidden");
+        receipt.classList.add("hidden");
+        message.textContent =
+            "Your purchase is still processing. Please wait and do not submit another request.";
+        if (button) button.disabled = true;
+
+    } else if (airtimePurchaseNeedsVerification) {
+        purchaseForm.classList.add("hidden");
+        receipt.classList.remove("hidden");
+
+    } else {
+        purchaseForm.classList.remove("hidden");
+        receipt.classList.add("hidden");
+        message.textContent = "";
+        if (button) button.disabled = false;
+    }
+
     showOnlyScreen("airtimeCard");
 }
-
 
 function showDashboardFromAirtime() {
     showOnlyScreen("dashboardCard");
@@ -1119,11 +1164,18 @@ function showDashboardFromAirtime() {
 
 
 async function buyAirtime() {
+    if (airtimePurchaseInProgress || airtimePurchaseNeedsVerification) {
+        return;
+    }
+
     const network = document.getElementById("airtimeNetwork").value;
     const phone = document.getElementById("airtimePhone").value.trim();
     const amount = Number(document.getElementById("airtimeAmount").value);
     const message = document.getElementById("airtimeMessage");
     const token = localStorage.getItem("access_token");
+    const purchaseForm = document.getElementById("airtimePurchaseForm");
+    const receipt = document.getElementById("airtimeReceipt");
+    const button = purchaseForm.querySelector('button[onclick="buyAirtime()"]');
 
     message.textContent = "";
 
@@ -1141,7 +1193,7 @@ async function buyAirtime() {
     const networkPrefixes = {
         MTN: [
             "0703", "0704", "0706", "0803", "0806",
-            "0810", "0813", "0814", "0816",
+            "0810", "0813", "0814", "0816", "0707",
             "0903", "0906", "0913", "0916",
             "07025", "07026"
         ],
@@ -1174,15 +1226,15 @@ async function buyAirtime() {
         return;
     }
 
+    if (!Number.isFinite(amount) || amount > 100000) {
+        message.textContent = "Maximum airtime purchase is ₦100,000.";
+        return;
+    }
+
     if (!token) {
         message.textContent = "Please log in again before purchasing.";
         return;
     }
-
-if (!Number.isFinite(amount) || amount > 100000) {
-    message.textContent = "Maximum airtime purchase is ₦100,000.";
-    return;
-}
 
     if (!confirm(
         "Confirm airtime purchase:\n\n" +
@@ -1196,14 +1248,64 @@ if (!Number.isFinite(amount) || amount > 100000) {
 
     message.textContent = "Processing purchase. Please wait...";
 
+    if (button) button.disabled = true;
+
+    let requestStarted = false;
+
+    function displayAirtimeReceipt(status, result, receiptMessage) {
+        airtimePurchaseInProgress = false;
+        airtimePurchaseNeedsVerification =
+            status !== "success" && status !== "failed";
+
+        document.getElementById("airtimeReceiptTitle").textContent =
+            status === "success"
+                ? "Airtime purchased successfully!"
+                : status === "failed"
+                    ? "Purchase failed"
+                    : "Purchase status requires verification";
+
+        document.getElementById("airtimeReceiptStatus").textContent =
+            "Status: " + status;
+
+        document.getElementById("airtimeReceiptNetwork").textContent =
+            "Network: " + network;
+
+        document.getElementById("airtimeReceiptPhone").textContent =
+            "Phone: " + phone;
+
+        const receiptAmount = Number(
+            result.amount !== undefined ? result.amount : amount
+        );
+
+        document.getElementById("airtimeReceiptAmount").textContent =
+            Number.isFinite(receiptAmount)
+                ? "Amount: ₦" + receiptAmount.toLocaleString("en-NG", {
+                    minimumFractionDigits: 2,
+                    maximumFractionDigits: 2
+                })
+                : "Amount: Check transaction history";
+
+        document.getElementById("airtimeReceiptReference").textContent =
+            "Reference: " + (result.reference || "Not returned");
+
+        document.getElementById("airtimeReceiptMessage").textContent =
+            receiptMessage;
+
+        purchaseForm.classList.add("hidden");
+        receipt.classList.remove("hidden");
+    }
+
     try {
+        airtimePurchaseInProgress = true;
+        requestStarted = true;
+
         const response = await fetch("/airtime/purchase", {
             method: "POST",
-           headers: {
-    "Content-Type": "application/json",
-    "Authorization": `Bearer ${token}`,
-    "Idempotency-Key": crypto.randomUUID()
-},
+            headers: {
+                "Content-Type": "application/json",
+                "Authorization": "Bearer " + token,
+                "Idempotency-Key": crypto.randomUUID()
+            },
             body: JSON.stringify({
                 network: network,
                 phone: phone,
@@ -1211,38 +1313,71 @@ if (!Number.isFinite(amount) || amount > 100000) {
             })
         });
 
-        const data = await response.json().catch(() => ({}));
+        const result = await response.json().catch(() => ({}));
 
-        if (response.ok) {
-            message.textContent =
-                (data.message || "Purchase request processed.") +
-                (data.reference ? " Reference: " + data.reference : "") +
-                (data.wallet_balance !== undefined
-                    ? " Wallet balance: ₦" +
-                      Number(data.wallet_balance).toLocaleString("en-NG", {
-                          minimumFractionDigits: 2,
-                          maximumFractionDigits: 2
-                      })
-                    : "");
+        if (!response.ok) {
+            throw new Error(
+                typeof result.detail === "string"
+                    ? result.detail
+                    : "The purchase request failed."
+            );
+        }
 
-            if (data.status === "success" || data.status === "failed") {
-                if (typeof loadWallet === "function") {
-                    await loadWallet();
-                }
-            }
+        const status = String(
+            result.status || "pending"
+        ).toLowerCase();
+
+        if (status === "success") {
+            displayAirtimeReceipt(
+                "success",
+                result,
+                result.message || "Your airtime purchase was confirmed successfully."
+            );
+        } else if (status === "failed") {
+            displayAirtimeReceipt(
+                "failed",
+                result,
+                result.message || "The provider reported a failed transaction. Check your wallet and transaction history."
+            );
         } else {
-            message.textContent =
-                typeof data.detail === "string"
-                    ? data.detail
-                    : "Purchase request failed. Please check your account and try again.";
+            displayAirtimeReceipt(
+                "pending",
+                result,
+                "Your transaction is not yet confirmed. Do not retry this purchase. Check your transaction status."
+            );
+        }
+
+        if (
+            (status === "success" || status === "failed") &&
+            typeof loadWallet === "function"
+        ) {
+            try {
+                await loadWallet();
+            } catch (walletError) {
+                console.error("Wallet refresh error:", walletError);
+            }
         }
 
     } catch (error) {
-        message.textContent =
-            "Unable to confirm the purchase response. Check transaction history before trying again.";
         console.error("Airtime purchase error:", error);
+
+        if (requestStarted) {
+            displayAirtimeReceipt(
+                "pending",
+                {},
+                "We could not confirm the result of this request. Do not submit another purchase. Check your transaction history before taking further action."
+            );
+        } else {
+            airtimePurchaseInProgress = false;
+            airtimePurchaseNeedsVerification = false;
+            message.textContent =
+                error.message || "Unable to submit the purchase.";
+            if (button) button.disabled = false;
+        }
     }
 }
+
+
 
 
 async function fundWallet() {
@@ -1535,7 +1670,7 @@ async function buyData() {
     }
 
     const networkPrefixes = {
-        MTN: ["0703", "0704", "0706", "0803", "0806", "0810", "0813", "0814", "0816", "0903", "0906", "0913", "0916", "07025", "07026"],
+        MTN: ["0703", "0704", "0706", "0707", "0803", "0806", "0810", "0813", "0814", "0816", "0903", "0906", "0913", "0916", "07025", "07026"],
         Airtel: ["0701", "0708", "0802", "0808", "0812", "0901", "0902", "0904", "0907", "0912"],
         Glo: ["0705", "0805", "0807", "0811", "0815", "0905", "0915"],
         "9mobile": ["0809", "0817", "0818", "0908", "0909"]
