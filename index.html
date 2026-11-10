@@ -1551,6 +1551,8 @@ function getApiErrorMessage(value, fallback) {
     return fallback;
 }
 
+
+
 async function loadDataPlans() {
     const network = document.getElementById("dataNetwork").value;
     const planSelect = document.getElementById("dataPlan");
@@ -1576,13 +1578,13 @@ async function loadDataPlans() {
         const result = await response.json();
 
         if (!response.ok) {
-    throw new Error(
-        getApiErrorMessage(
-            result.detail || result.message,
-            "Unable to load data plans."
-        )
-    );
-}
+            throw new Error(
+                getApiErrorMessage(
+                    result.detail || result.message,
+                    "Unable to load data plans."
+                )
+            );
+        }
 
         planSelect.innerHTML =
             '<option value="">Choose a data plan</option>';
@@ -1595,11 +1597,13 @@ async function loadDataPlans() {
         }
 
         result.plans.forEach(plan => {
+            const price = Number(plan.selling_price ?? plan.price);
+
             if (
                 !Number.isInteger(Number(plan.plan_id)) ||
                 !plan.name ||
-                !Number.isFinite(Number(plan.price)) ||
-                Number(plan.price) <= 0
+                !Number.isFinite(price) ||
+                price <= 0
             ) {
                 return;
             }
@@ -1607,9 +1611,11 @@ async function loadDataPlans() {
             const option = document.createElement("option");
 
             option.value = String(plan.plan_id);
+
             const validity = plan.validity || "Validity not specified";
+
             option.textContent =
-                `${plan.name} (${validity}) — ₦${Number(plan.price).toLocaleString("en-NG")}`;
+                `${plan.name} (${validity}) — ₦${price.toLocaleString("en-NG")}`;
 
             planSelect.appendChild(option);
         });
@@ -1626,13 +1632,16 @@ async function loadDataPlans() {
             '<option value="">Could not load plans</option>';
 
         message.textContent = getApiErrorMessage(
-    error.message,
-    "Unable to load data plans. Please try again."
-);
+            error.message,
+            "Unable to load data plans. Please try again."
+        );
 
-        console.error("Ridamsub plan loading error:", error);
+        console.error("Data plan loading error:", error);
     }
 }
+
+
+
 
 async function buyData() {
     const network = document.getElementById("dataNetwork").value;
