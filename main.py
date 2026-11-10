@@ -1,4 +1,4 @@
-import os
+﻿import os
 
 
 
@@ -2022,6 +2022,229 @@ async def execute_ridamsub_purchase(
 
 
 
+async def execute_gndata_airtime_purchase(
+    db: Session,
+    user_id: int,
+    network: str,
+    phone: str,
+    amount,
+    idempotency_key: str,
+    background_tasks: BackgroundTasks | None = None,
+):
+    """Execute one GN Data airtime purchase with a single wallet reservation."""
+
+    if not isinstance(idempotency_key, str) or not idempotency_key.strip():
+        raise HTTPException(
+            status_code=400,
+            detail="An idempotency key is required.",
+        )
+
+    network_key = str(network).strip().lower()
+    gn_network = GN_DATA_NETWORKS.get(network_key)
+
+    if not gn_network:
+        raise HTTPException(
+            status_code=400,
+            detail="Unsupported GN Data airtime network.",
+        )
+
+    try:
+        final_amount = Decimal(str(amount)).quantize(Decimal("0.01"))
+    except Exception:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid airtime amount.",
+        )
+
+    if (
+        not final_amount.is_finite()
+        or final_amount <= 0
+        or final_amount != final_amount.to_integral_value()
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="Airtime amount must be a positive whole number.",
+        )
+
+    gn_amount = int(final_amount)
+    network_id = int(gn_network["network_id"])
+
+    client = GNDataClient()
+
+    if not client.enabled or not client.api_key:
+        raise HTTPException(
+            status_code=503,
+            detail="GN Data airtime is currently unavailable.",
+        )
+
+    request_fingerprint = generate_purchase_fingerprint(
+        purchase_type="airtime",
+        network=network_key,
+        phone=phone,
+        amount=final_amount,
+        gateway="gndata",
+    )
+
+    local_ref = f"OMOTECH_AIRTIME_{secrets.token_hex(12)}"
+
+    try:
+        user = (
+            db.query(User)
+            .filter(User.id == user_id)
+            .with_for_update()
+            .first()
+        )
+
+        if user is None:
+            raise HTTPException(
+                status_code=404,
+                detail="Customer account not found.",
+            )
+
+        existing = (
+            db.query(WalletTransaction)
+            .filter(
+                WalletTransaction.user_id == user_id,
+                WalletTransaction.idempotency_key == idempotency_key,
+            )
+            .first()
+        )
+
+        if existing:
+            if (
+                existing.transaction_type != "airtime_purchase"
+                or Decimal(str(existing.amount)) != final_amount
+                or existing.gateway != "gndata"
+                or not existing.request_fingerprint
+                or existing.request_fingerprint != request_fingerprint
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail="Idempotency key was already used for another transaction.",
+                )
+
+            existing_result = {
+                "reference": existing.reference,
+                "status": existing.status,
+                "amount": float(existing.amount),
+                "message": "Existing transaction returned. Do not retry.",
+            }
+
+            db.rollback()
+            return existing_result
+
+        if Decimal(str(user.wallet_balance)) < final_amount:
+            raise HTTPException(
+                status_code=400,
+                detail="Insufficient wallet balance.",
+            )
+
+        user.wallet_balance = (
+            Decimal(str(user.wallet_balance)) - final_amount
+        )
+
+        transaction = WalletTransaction(
+            user_id=user_id,
+            transaction_type="airtime_purchase",
+            amount=final_amount,
+            provider_cost=None,
+            status="pending",
+            reference=local_ref,
+            gateway="gndata",
+            idempotency_key=idempotency_key,
+            request_fingerprint=request_fingerprint,
+        )
+
+        db.add(transaction)
+        db.commit()
+        db.refresh(transaction)
+
+    except HTTPException:
+        db.rollback()
+        raise
+
+    except Exception:
+        db.rollback()
+        logger.exception("Could not reserve wallet funds for GN Data airtime.")
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to initiate airtime purchase.",
+        )
+
+    provider_status = PENDING_REQUERY
+    provider_reference = None
+
+    try:
+        response_json = await client.purchase_airtime(
+            phone=phone,
+            amount=gn_amount,
+            network_id=network_id,
+            idempotency_key=idempotency_key,
+        )
+
+        provider_reference = (
+            response_json.get("request_id")
+            or response_json.get("transaction_id")
+            or response_json.get("id")
+        )
+
+        provider_status = normalize_gndata_status(response_json)
+
+        transaction.provider_transaction_id = (
+            str(provider_reference) if provider_reference else None
+        )
+
+        db.commit()
+
+    except GNDataError:
+        logger.exception(
+            "GN Data airtime response uncertain for %s",
+            local_ref,
+        )
+        provider_status = PENDING_REQUERY
+
+    except Exception:
+        logger.exception(
+            "Unexpected GN Data airtime error for %s",
+            local_ref,
+        )
+        provider_status = PENDING_REQUERY
+
+    result = apply_provider_result(
+        local_ref,
+        provider_status,
+        gateway="gndata",
+    )
+
+    if result.get("status") == PENDING_REQUERY and background_tasks:
+        if provider_reference:
+            background_tasks.add_task(
+                background_reconcile,
+                local_ref,
+                "airtime",
+            )
+
+    return {
+        "reference": local_ref,
+        "transaction_type": "airtime",
+        "amount": float(final_amount),
+        "status": result.get("status", PENDING_REQUERY),
+	"message": (
+            "Airtime purchase successful."
+            if result.get("status") == "success"
+            else (
+                "Airtime purchase failed. Your wallet has been refunded."
+                if result.get("status") == "failed"
+                else "Purchase is being verified. Do not retry."
+            )
+        ),
+    }
+
+
+
+
+
+
 async def execute_gndata_purchase(
     db: Session,
     user_id: int,
@@ -2258,12 +2481,16 @@ async def execute_gndata_purchase(
         "transaction_type": "data",
         "amount": float(final_amount),
         "status": result.get("status", PENDING_REQUERY),
-        "message": (
+	 "message": (
             "Data purchase successful."
             if result.get("status") == "success"
-            else "Purchase is being verified. Do not retry."
+            else (
+                "Data purchase failed. Your wallet has been refunded."
+                if result.get("status") == "failed"
+                else "Purchase is being verified. Do not retry."
+            )
         ),
-    }
+}
 
 
 
@@ -4819,8 +5046,6 @@ async def purchase_data(
 
 
 
-
-
 @app.post("/airtime/purchase")
 
 async def purchase_airtime(
@@ -4841,41 +5066,48 @@ async def purchase_airtime(
 
 ):
 
+
     key = validate_idempotency_key(idempotency_key)
 
+    network_key = str(request.network).strip().lower()
+    gn_network = GN_DATA_NETWORKS.get(network_key)
+    gn_client = GNDataClient()
 
-
-    if not RIDAMSUB_PURCHASES_ENABLED:
-
-        raise HTTPException(
-
-            status_code=503,
-
-            detail="Airtime purchases are temporarily disabled."
-
+    # GN Data gets first priority when enabled and configured.
+    # No fallback is attempted after a GN purchase request is submitted.
+    if (
+        gn_network
+        and gn_client.enabled
+        and gn_client.api_key
+    ):
+        return await execute_gndata_airtime_purchase(
+            db=db,
+            user_id=current_user.id,
+            network=request.network,
+            phone=request.phone,
+            amount=request.amount,
+            idempotency_key=key,
+            background_tasks=background_tasks,
         )
 
-
+    # Ridamsub is used only when GN cannot be selected before submission.
+    if not RIDAMSUB_PURCHASES_ENABLED:
+        raise HTTPException(
+            status_code=503,
+            detail="Airtime purchases are temporarily unavailable.",
+        )
 
     return await execute_ridamsub_purchase(
-
         db=db,
-
         user_id=current_user.id,
-
         purchase_type="airtime",
-
         network=request.network,
-
         phone=request.phone,
-
         amount=request.amount,
-
         idempotency_key=key,
-
         background_tasks=background_tasks,
-
     )
+
 
 
 
