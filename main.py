@@ -4905,9 +4905,100 @@ APPROVED_DATA_PLANS = {
 
 
 
+async def get_live_gndata_plans(network_id: int):
+    """
+    Return approved GN plans that GN currently marks as available.
+    Keep Omotech selling prices; refresh provider costs from GN.
+    """
+    client = GNDataClient()
+
+    if not client.enabled or not client.api_key:
+        raise HTTPException(
+            status_code=503,
+            detail="GN Data catalogue is unavailable.",
+        )
+
+    try:
+        response = await client.data_services(include_plans=True)
+    except GNDataError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="Could not retrieve the live GN Data catalogue.",
+        ) from exc
+
+    if not isinstance(response, dict):
+        raise HTTPException(
+            status_code=503,
+            detail="GN Data returned an invalid catalogue.",
+        )
+
+    services = response.get("data")
+
+    if not isinstance(services, list):
+        raise HTTPException(
+            status_code=503,
+            detail="GN Data catalogue format is invalid.",
+        )
+
+    service = next(
+        (
+            item for item in services
+            if isinstance(item, dict)
+            and str(item.get("id")) == str(network_id)
+        ),
+        None,
+    )
+
+    if service is None:
+        return {}
+
+    live_plans = service.get("plans")
+
+    if not isinstance(live_plans, list):
+        raise HTTPException(
+            status_code=503,
+            detail="GN Data plan catalogue is invalid.",
+        )
+
+    approved_plans = {}
+
+    for live_plan in live_plans:
+        if not isinstance(live_plan, dict):
+            continue
+
+        if live_plan.get("available") is not True:
+            continue
+
+        try:
+            plan_id = int(live_plan["id"])
+            provider_cost = Decimal(str(live_plan["price"]))
+        except (KeyError, TypeError, ValueError):
+            continue
+
+        if not provider_cost.is_finite() or provider_cost <= 0:
+            continue
+
+        # Only sell plans with an approved Omotech selling price.
+        configured = get_plan(plan_id, network_id=network_id)
+
+        if configured is None:
+            continue
+
+        approved_plan = dict(configured)
+        approved_plan["provider_cost"] = provider_cost.quantize(
+            Decimal("0.01")
+        )
+
+        approved_plans[plan_id] = approved_plan
+
+    return approved_plans
+
+
+
+
 
 @app.get("/gndata/data/plans/{network}")
-def get_gndata_data_plans(network: str):
+async def get_gndata_data_plans(network: str):
     network_key = network.strip().lower()
 
     network_info = GN_DATA_NETWORKS.get(network_key)
@@ -4919,7 +5010,7 @@ def get_gndata_data_plans(network: str):
         )
 
     network_id = network_info["network_id"]
-    plans = get_network_plans(network_id)
+    plans = await get_live_gndata_plans(network_id)
 
     customer_plans = []
 
@@ -4939,9 +5030,8 @@ def get_gndata_data_plans(network: str):
         "plans": customer_plans,
     }
 
-
 @app.get("/data/plans/{network}")
-def get_data_plans(network: str):
+async def get_data_plans(network: str):
     network_key = str(network).strip().lower()
 
     if network_key not in GN_DATA_NETWORKS:
@@ -4957,7 +5047,9 @@ def get_data_plans(network: str):
     gn_network = GN_DATA_NETWORKS[network_key]
     gn_network_id = int(gn_network["network_id"])
 
-    for plan in get_network_plans(gn_network_id):
+    live_gn_plans = await get_live_gndata_plans(gn_network_id)
+
+    for plan in live_gn_plans.values():
         plans.append({
             "plan_id": plan["plan_id"],
             "name": plan["name"],
