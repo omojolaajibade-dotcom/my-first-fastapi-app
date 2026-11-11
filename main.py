@@ -2022,6 +2022,161 @@ async def execute_ridamsub_purchase(
 
 
 
+async def submit_ridamsub_airtime_fallback(
+    db: Session,
+    transaction: WalletTransaction,
+    network: str,
+    phone: str,
+    amount: Decimal,
+    airtime_type: str = "VTU",
+    background_tasks: BackgroundTasks | None = None,
+):
+    """Submit an existing GN airtime transaction to Ridamsub without a second debit."""
+
+    local_ref = transaction.reference
+    network_key = network.strip().lower()
+
+    # GN has definitively rejected the request, so refund if fallback
+    # cannot safely be submitted.
+    if not RIDAMSUB_PURCHASES_ENABLED:
+        return apply_provider_result(
+            local_ref, "failed", gateway="gndata"
+        )
+
+    network_id = NETWORK_IDS.get(network_key)
+    if network_id is None:
+        return apply_provider_result(
+            local_ref, "failed", gateway="gndata"
+        )
+
+    try:
+        headers = ridamsub_headers()
+    except Exception:
+        logger.exception(
+            "Ridamsub fallback configuration unavailable: %s",
+            local_ref,
+        )
+        return apply_provider_result(
+            local_ref, "failed", gateway="gndata"
+        )
+
+    rates = {
+        "mtn": Decimal("0.98"),
+        "glo": Decimal("0.99"),
+        "9mobile": Decimal("0.98"),
+        "airtel": Decimal("0.99"),
+    }
+
+    rate = rates.get(network_key)
+    if rate is None:
+        return apply_provider_result(
+            local_ref, "failed", gateway="gndata"
+        )
+
+    provider_cost = (
+        amount * rate
+    ).quantize(Decimal("0.01"))
+
+    # Switch the existing transaction to Ridamsub.
+    # Keep its original GN request fingerprint unchanged.
+    transaction.gateway = "ridamsub"
+    transaction.provider_cost = provider_cost
+
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
+        logger.exception(
+            "Could not prepare Ridamsub fallback: %s",
+            local_ref,
+        )
+        return apply_provider_result(
+            local_ref, "failed", gateway="gndata"
+        )
+
+    payload = {
+        "network": network_id,
+        "amount": int(amount),
+        "mobile_number": phone,
+        "Ported_number": True,
+        "airtime_type": airtime_type,
+        "request-id": local_ref,
+    }
+
+    provider_status = PENDING_REQUERY
+
+    try:
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            response = await client.post(
+                f"{RIDAMSUB_BASE_URL}/api/topup/",
+                headers=headers,
+                json=payload,
+            )
+
+        try:
+            response_json = response.json()
+        except ValueError:
+            response_json = None
+
+        logger.info(
+            "Ridamsub airtime fallback: HTTP %s | Reference %s",
+            response.status_code,
+            local_ref,
+        )
+
+        if response.status_code < 400:
+            provider_status = normalize_provider_status(response_json)
+
+            if isinstance(response_json, dict):
+                provider_id = (
+                    response_json.get("ident")
+                    or response_json.get("transaction_id")
+                    or response_json.get("transid")
+                    or response_json.get("id")
+                )
+
+                if provider_id is not None:
+                    try:
+                        transaction.provider_transaction_id = (
+                            str(provider_id)[:100]
+                        )
+                        db.commit()
+                    except Exception:
+                        db.rollback()
+                        logger.exception(
+                            "Could not save Ridamsub fallback provider ID: %s",
+                            local_ref,
+                        )
+                        provider_status = PENDING_REQUERY
+
+    except Exception:
+        db.rollback()
+        logger.exception(
+            "Ridamsub airtime fallback outcome uncertain: %s",
+            local_ref,
+        )
+        provider_status = PENDING_REQUERY
+
+    result = apply_provider_result(
+        local_ref,
+        provider_status,
+        gateway="ridamsub",
+    )
+
+    if (
+        result.get("status") == PENDING_REQUERY
+        and background_tasks is not None
+    ):
+        background_tasks.add_task(
+            background_reconcile,
+            local_ref,
+            "airtime",
+        )
+
+    return result
+
+
+
 async def execute_gndata_airtime_purchase(
     db: Session,
     user_id: int,
@@ -2114,7 +2269,7 @@ async def execute_gndata_airtime_purchase(
             if (
                 existing.transaction_type != "airtime_purchase"
                 or Decimal(str(existing.amount)) != final_amount
-                or existing.gateway != "gndata"
+                or existing.gateway not in {"gndata", "ridamsub"}
                 or not existing.request_fingerprint
                 or existing.request_fingerprint != request_fingerprint
             ):
@@ -2171,8 +2326,10 @@ async def execute_gndata_airtime_purchase(
             detail="Unable to initiate airtime purchase.",
         )
 
+
     provider_status = PENDING_REQUERY
     provider_reference = None
+    fallback_result = None
 
     try:
         response_json = await client.purchase_airtime(
@@ -2196,12 +2353,30 @@ async def execute_gndata_airtime_purchase(
 
         db.commit()
 
-    except GNDataError:
-        logger.exception(
-            "GN Data airtime response uncertain for %s",
-            local_ref,
-        )
-        provider_status = PENDING_REQUERY
+    except GNDataError as exc:
+        if exc.is_definitive_rejection:
+            logger.warning(
+                "GN Data definitively rejected airtime request %s; "
+                "attempting Ridamsub fallback. HTTP %s",
+                local_ref,
+                exc.status_code,
+            )
+
+            fallback_result = await submit_ridamsub_airtime_fallback(
+                db=db,
+                transaction=transaction,
+                network=network_key,
+                phone=phone,
+                amount=final_amount,
+                airtime_type="VTU",
+                background_tasks=background_tasks,
+            )
+        else:
+            logger.exception(
+                "GN Data airtime response uncertain for %s",
+                local_ref,
+            )
+            provider_status = PENDING_REQUERY
 
     except Exception:
         logger.exception(
@@ -2210,14 +2385,17 @@ async def execute_gndata_airtime_purchase(
         )
         provider_status = PENDING_REQUERY
 
-    result = apply_provider_result(
-        local_ref,
-        provider_status,
-        gateway="gndata",
-    )
+    if fallback_result is not None:
+        result = fallback_result
+    else:
+        result = apply_provider_result(
+            local_ref,
+            provider_status,
+            gateway="gndata",
+        )
 
     if result.get("status") == PENDING_REQUERY and background_tasks:
-        if provider_reference:
+        if fallback_result is None and provider_reference:
             background_tasks.add_task(
                 background_reconcile,
                 local_ref,
@@ -2229,7 +2407,7 @@ async def execute_gndata_airtime_purchase(
         "transaction_type": "airtime",
         "amount": float(final_amount),
         "status": result.get("status", PENDING_REQUERY),
-	"message": (
+        "message": (
             "Airtime purchase successful."
             if result.get("status") == "success"
             else (
@@ -2241,6 +2419,177 @@ async def execute_gndata_airtime_purchase(
     }
 
 
+async def submit_ridamsub_data_fallback(
+    db: Session,
+    transaction: WalletTransaction,
+    network: str,
+    phone: str,
+    gn_plan: dict,
+    background_tasks: BackgroundTasks | None = None,
+):
+    """Use Ridamsub for an existing GN transaction without another debit."""
+
+    import re
+
+    local_ref = transaction.reference
+    network_key = network.strip().lower()
+    customer_amount = Decimal(str(transaction.amount))
+
+    def capacity_mb(name):
+        match = re.search(
+            r"(\d+(?:\.\d+)?)\s*(GB|MB)",
+            str(name),
+            re.IGNORECASE,
+        )
+        if not match:
+            return None
+        value = Decimal(match.group(1))
+        return value * 1024 if match.group(2).upper() == "GB" else value
+
+
+    def bundle_type(name):
+        value = str(name).lower()
+
+        if "corporate" in value and "gifting" in value:
+            return None
+
+        for kind in (
+            "sme", "corporate", "gifting",
+            "social", "coupon", "mifi", "awoof"
+        ):
+            if kind in value:
+                return kind
+
+        return None
+    def validity_days(value):
+        value = str(value).strip().lower().replace("*", "")
+        if value in {"daily", "1 day"}:
+            return 1
+        if value in {"weekly", "7 days", "1 week"}:
+            return 7
+        if value in {"14 days", "2 weeks"}:
+            return 14
+        if value in {"monthly", "1 month", "30 days"}:
+            return 30
+        if value in {"60 days", "2 months"}:
+            return 60
+        return None
+
+    gn_size = capacity_mb(gn_plan.get("name"))
+    gn_type = str(gn_plan.get("plan_type", "")).strip().lower()
+    gn_validity = validity_days(gn_plan.get("validity"))
+
+    if not all((gn_size, gn_type, gn_validity)):
+        return apply_provider_result(local_ref, "failed", gateway="gndata")
+
+    matching_plan = None
+
+    for candidate in RIDAMSUB_DATA_PLANS.get(network_key, []):
+        if candidate.get("available", True) is not True:
+            continue
+
+        if capacity_mb(candidate.get("name")) != gn_size:
+            continue
+
+        if bundle_type(candidate.get("name")) != gn_type:
+            continue
+
+        if validity_days(candidate.get("validity")) != gn_validity:
+            continue
+
+        try:
+            cost = Decimal(str(candidate["provider_cost"])).quantize(
+                Decimal("0.01")
+            )
+        except (InvalidOperation, TypeError, ValueError, KeyError):
+            continue
+
+        if not cost.is_finite() or cost <= 0 or cost > customer_amount:
+            continue
+
+        matching_plan = candidate
+        break
+
+    if matching_plan is None or not RIDAMSUB_PURCHASES_ENABLED:
+        logger.warning("No safe Ridamsub data equivalent for %s", local_ref)
+        return apply_provider_result(local_ref, "failed", gateway="gndata")
+
+    try:
+        headers = ridamsub_headers()
+        network_id = NETWORK_IDS.get(network_key)
+
+        if network_id is None:
+            return apply_provider_result(local_ref, "failed", gateway="gndata")
+
+        transaction.gateway = "ridamsub"
+        transaction.provider_cost = Decimal(
+            str(matching_plan["provider_cost"])
+        ).quantize(Decimal("0.01"))
+        db.commit()
+
+    except Exception:
+        db.rollback()
+        logger.exception("Could not prepare Ridamsub data fallback: %s", local_ref)
+        return apply_provider_result(local_ref, "failed", gateway="gndata")
+
+    payload = {
+        "network": network_id,
+        "mobile_number": phone,
+        "plan": int(matching_plan["plan_id"]),
+        "Ported_number": True,
+        "request-id": local_ref,
+    }
+
+    provider_status = PENDING_REQUERY
+
+    try:
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            response = await client.post(
+                f"{RIDAMSUB_BASE_URL}/api/data/",
+                headers=headers,
+                json=payload,
+            )
+
+        try:
+            response_json = response.json()
+        except ValueError:
+            response_json = None
+
+        if response.status_code < 400:
+            provider_status = normalize_provider_status(response_json)
+
+            if isinstance(response_json, dict):
+                provider_id = (
+                    response_json.get("ident")
+                    or response_json.get("transaction_id")
+                    or response_json.get("transid")
+                    or response_json.get("id")
+                )
+                if provider_id is not None:
+                    transaction.provider_transaction_id = str(provider_id)[:100]
+                    db.commit()
+
+        logger.info(
+            "Ridamsub data fallback response: HTTP %s | Reference %s",
+            response.status_code,
+            local_ref,
+        )
+
+    except Exception:
+        db.rollback()
+        logger.exception("Ridamsub data fallback outcome uncertain: %s", local_ref)
+        provider_status = PENDING_REQUERY
+
+    result = apply_provider_result(
+        local_ref,
+        provider_status,
+        gateway="ridamsub",
+    )
+
+    if result.get("status") == PENDING_REQUERY and background_tasks:
+        background_tasks.add_task(background_reconcile, local_ref, "data")
+
+    return result
 
 
 
@@ -2365,7 +2714,7 @@ async def execute_gndata_purchase(
             if (
                 existing.transaction_type != "data_purchase"
                 or Decimal(str(existing.amount)) != final_amount
-                or existing.gateway != "gndata"
+                or existing.gateway not in {"gndata", "ridamsub"}
                 or not existing.request_fingerprint
                 or existing.request_fingerprint != request_fingerprint
          ):
@@ -2423,8 +2772,10 @@ async def execute_gndata_purchase(
             detail="Unable to initiate data purchase.",
         )
 
+
     provider_status = PENDING_REQUERY
     provider_reference = None
+    fallback_result = None
 
     try:
         response_json = await client.purchase_data(
@@ -2445,15 +2796,31 @@ async def execute_gndata_purchase(
         transaction.provider_transaction_id = (
             str(provider_reference) if provider_reference else None
         )
-
         db.commit()
 
-    except GNDataError:
-        logger.exception(
-            "GN Data purchase response uncertain for %s",
-            local_ref,
-        )
-        provider_status = PENDING_REQUERY
+    except GNDataError as exc:
+        if exc.is_definitive_rejection:
+            logger.warning(
+                "GN Data definitively rejected data purchase %s; "
+                "attempting Ridamsub fallback. HTTP %s",
+                local_ref,
+                exc.status_code,
+            )
+
+            fallback_result = await submit_ridamsub_data_fallback(
+                db=db,
+                transaction=transaction,
+                network=network_key,
+                phone=phone,
+                gn_plan=plan,
+                background_tasks=background_tasks,
+            )
+        else:
+            logger.exception(
+                "GN Data data-purchase outcome uncertain: %s",
+                local_ref,
+            )
+            provider_status = PENDING_REQUERY
 
     except Exception:
         logger.exception(
@@ -2462,14 +2829,20 @@ async def execute_gndata_purchase(
         )
         provider_status = PENDING_REQUERY
 
-    result = apply_provider_result(
-        local_ref,
-        provider_status,
-        gateway="gndata",
-    )
+    if fallback_result is not None:
+        result = fallback_result
+    else:
+        result = apply_provider_result(
+            local_ref,
+            provider_status,
+            gateway="gndata",
+        )
 
-    if result.get("status") == PENDING_REQUERY and background_tasks:
-        if provider_reference:
+        if (
+            result.get("status") == PENDING_REQUERY
+            and background_tasks
+            and provider_reference
+        ):
             background_tasks.add_task(
                 background_reconcile,
                 local_ref,

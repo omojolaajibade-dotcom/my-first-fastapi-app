@@ -1,5 +1,8 @@
-
 import os
+
+import logging
+
+logger = logging.getLogger(__name__)
 
 import httpx
 
@@ -7,6 +10,26 @@ import httpx
 class GNDataError(Exception):
     """Raised when a GN Data API request fails."""
 
+    def __init__(self, message, status_code=None, response_body=None):
+        super().__init__(message)
+        self.status_code = status_code
+        self.response_body = response_body or ""
+
+    @property
+    def is_definitive_rejection(self):
+        if self.status_code != 404:
+            return False
+
+        body = self.response_body.lower()
+
+        markers = (
+            "route not found",
+            "endpoint not found",
+            "cannot post",
+            "cannot find the requested resource",
+        )
+
+        return any(marker in body for marker in markers)
 
 class GNDataClient:
     """Read-only GN Data API client."""
@@ -40,6 +63,8 @@ class GNDataClient:
     async def _get(self, endpoint):
         url = f"{self.base_url}/{endpoint.lstrip('/')}"
 
+        logger.info("GN Data request URL: %s", url)
+
         try:
             async with httpx.AsyncClient(
                 timeout=self.timeout
@@ -67,10 +92,7 @@ class GNDataClient:
                 "GN Data request timed out."
             ) from exc
 
-        except httpx.HTTPStatusError as exc:
-            raise GNDataError(
-                f"GN Data returned HTTP {exc.response.status_code}."
-            ) from exc
+
 
         except httpx.RequestError as exc:
             raise GNDataError(
@@ -215,10 +237,13 @@ class GNDataClient:
             ) from exc
 
         except httpx.HTTPStatusError as exc:
-            raise GNDataError(
-                f"GN Data returned HTTP {exc.response.status_code}."
-            ) from exc
+           response_body = exc.response.text[:2000]
 
+           raise GNDataError(
+        f"GN Data returned HTTP {exc.response.status_code}.",
+        status_code=exc.response.status_code,
+        response_body=response_body,
+    ) from exc
         except httpx.RequestError as exc:
             raise GNDataError(
                 "Unable to connect to GN Data."
