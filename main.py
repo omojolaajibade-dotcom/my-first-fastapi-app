@@ -2353,7 +2353,16 @@ async def execute_gndata_airtime_purchase(
 
         db.commit()
 
+
     except GNDataError as exc:
+        logger.error(
+            "GN DATA ACTUAL AIRTIME RESPONSE | "
+            "Reference=%s | HTTP=%s | Body=%s",
+            local_ref,
+            exc.status_code,
+            exc.response_body or "<EMPTY RESPONSE BODY>",
+        )
+
         if exc.is_definitive_rejection:
             logger.warning(
                 "GN Data definitively rejected airtime request %s; "
@@ -2384,6 +2393,8 @@ async def execute_gndata_airtime_purchase(
             local_ref,
         )
         provider_status = PENDING_REQUERY
+
+
 
     if fallback_result is not None:
         result = fallback_result

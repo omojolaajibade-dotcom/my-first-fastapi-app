@@ -84,11 +84,30 @@ class GNDataClient:
                     )
 
                 return result
+            
         except GNDataError:
             raise
 
-        except httpx.TimeoutException as exc:
+        except httpx.HTTPStatusError as exc:
+            response_body = exc.response.text[:2000]
+
+            logger.error(
+                "GN DATA ACTUAL GET RESPONSE | "
+                "URL=%s | HTTP=%s | Body=%s",
+                url,
+                exc.response.status_code,
+                response_body or "<EMPTY RESPONSE BODY>",
+            )
+
             raise GNDataError(
+                f"GN Data returned HTTP {exc.response.status_code}.",
+                status_code=exc.response.status_code,
+                response_body=response_body,
+            ) from exc
+
+        except httpx.TimeoutException as exc:
+
+                   raise GNDataError(
                 "GN Data request timed out."
             ) from exc
 
