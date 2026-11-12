@@ -2796,6 +2796,22 @@ async def execute_gndata_purchase(
             idempotency_key=idempotency_key,
         )
 
+        logger.warning(
+            "GN DATA PURCHASE RESPONSE FORMAT | "
+            "reference=%s | keys=%s | status=%r | "
+            "data_type=%s | data_keys=%s | request_id=%r",
+            local_ref,
+            sorted(response_json.keys()),
+            response_json.get("status"),
+            type(response_json.get("data")).__name__,
+            sorted(response_json["data"].keys())
+            if isinstance(response_json.get("data"), dict)
+            else None,
+            response_json.get("request_id")
+            or response_json.get("transaction_id")
+            or response_json.get("id"),
+        )
+
         provider_reference = (
             response_json.get("request_id")
             or response_json.get("transaction_id")
