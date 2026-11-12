@@ -7481,7 +7481,195 @@ def reconcile_customer_paystack_funding(
         raise HTTPException(
             status_code=500,
             detail="Unable to reconcile customer payment."
+
         )
+
+
+
+@app.post("/admin/providers/gndata/reconcile/{reference}")
+async def reconcile_gndata_purchase(
+    reference: str,
+    request: Request,
+    current_admin: Admin = Depends(get_current_admin),
+    db: Session = Depends(get_db),
+):
+    """
+    Manually reconcile an existing GN Data purchase using confirmed
+    provider evidence. This endpoint never changes the customer's wallet.
+    """
+    reference = str(reference or "").strip()
+
+    if not reference:
+        raise HTTPException(status_code=400, detail="Transaction reference is required.")
+
+    try:
+        payload = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid reconciliation details.")
+
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="Invalid reconciliation details.")
+
+    provider_transaction_id = str(
+        payload.get("provider_transaction_id") or ""
+    ).strip()
+
+    if not provider_transaction_id or len(provider_transaction_id) > 100:
+        raise HTTPException(
+            status_code=400,
+            detail="A valid GN Data provider transaction reference is required.",
+        )
+
+    try:
+        provider_cost = Decimal(str(payload.get("provider_cost", "")))
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid provider cost.")
+
+    if not provider_cost.is_finite() or provider_cost <= 0:
+        raise HTTPException(
+            status_code=400,
+            detail="Provider cost must be a positive amount.",
+        )
+
+    if provider_cost > Decimal("9999999999.99"):
+        raise HTTPException(
+            status_code=400,
+            detail="Provider cost exceeds the permitted amount.",
+        )
+
+    if provider_cost.as_tuple().exponent < -2:
+        raise HTTPException(
+            status_code=400,
+            detail="Provider cost must have no more than two decimal places.",
+        )
+
+    try:
+        transaction = (
+            db.query(WalletTransaction)
+            .filter(
+                WalletTransaction.reference == reference,
+                WalletTransaction.gateway == "gndata",
+                WalletTransaction.transaction_type.in_(
+                    ["airtime_purchase", "data_purchase"]
+                ),
+                WalletTransaction.user_id.isnot(None),
+                WalletTransaction.admin_id.is_(None),
+            )
+            .with_for_update()
+            .first()
+        )
+
+        if not transaction:
+            raise HTTPException(
+                status_code=404,
+                detail="Matching GN Data customer purchase was not found.",
+            )
+
+        current_status = str(transaction.status or "").strip().lower()
+
+        if current_status == "success":
+            same_provider_reference = (
+                str(transaction.provider_transaction_id or "").strip()
+                == provider_transaction_id
+            )
+            same_provider_cost = (
+                transaction.provider_cost is not None
+                and Decimal(str(transaction.provider_cost)) == provider_cost
+            )
+
+            if same_provider_reference and same_provider_cost:
+                return {
+                    "status": "success",
+                    "message": "This GN Data transaction has already been reconciled.",
+                    "reference": transaction.reference,
+                    "provider_transaction_id": transaction.provider_transaction_id,
+                    "provider_cost": float(transaction.provider_cost),
+                }
+
+            raise HTTPException(
+                status_code=409,
+                detail="This transaction is already successful with different provider details.",
+            )
+
+        if current_status not in ("pending", "pending_requery"):
+            raise HTTPException(
+                status_code=409,
+                detail=f"Transaction cannot be reconciled from status: {transaction.status}.",
+            )
+
+        existing_provider_reference = str(
+            transaction.provider_transaction_id or ""
+        ).strip()
+
+        if (
+            existing_provider_reference
+            and existing_provider_reference != provider_transaction_id
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail="A different provider transaction reference is already recorded.",
+            )
+
+        audit_reference = (
+            "gndata-reconcile:"
+            + hashlib.sha256(reference.encode("utf-8")).hexdigest()[:32]
+        )
+
+        transaction.provider_transaction_id = provider_transaction_id
+        transaction.provider_cost = provider_cost
+        transaction.status = "success"
+
+        existing_audit = (
+            db.query(AdminAuditLog)
+            .filter(AdminAuditLog.reference == audit_reference)
+            .first()
+        )
+
+        if not existing_audit:
+            db.add(
+                AdminAuditLog(
+                    admin_id=current_admin.id,
+                    user_id=transaction.user_id,
+                    action="gndata_purchase_reconciled",
+                    amount=transaction.amount,
+                    reason=(
+                        f"GN Data purchase manually reconciled. "
+                        f"Local ref: {reference}; "
+                        f"Provider ref: {provider_transaction_id}; "
+                        f"Provider cost: {provider_cost}"
+                    )[:255],
+                    reference=audit_reference,
+                )
+            )
+
+        db.commit()
+        db.refresh(transaction)
+
+        return {
+            "status": "success",
+            "message": "GN Data purchase successfully reconciled. Customer wallet was not changed.",
+            "reference": transaction.reference,
+            "provider_transaction_id": transaction.provider_transaction_id,
+            "amount": float(transaction.amount),
+            "provider_cost": float(transaction.provider_cost),
+        }
+
+    except HTTPException:
+        db.rollback()
+        raise
+
+    except Exception:
+        db.rollback()
+        logger.exception(
+            "GN Data manual reconciliation failed for %s",
+            reference,
+        )
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to reconcile GN Data purchase.",
+        )
+
+
 
 
 @app.get("/paystack/verify/{reference}")
