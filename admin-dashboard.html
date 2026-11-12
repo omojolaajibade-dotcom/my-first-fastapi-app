@@ -875,6 +875,23 @@
             );
         }
 
+        function canReconcileGndataPurchase(item) {
+            const reference = transactionReference(item);
+            const status = String(transactionStatus(item)).toLowerCase();
+
+            return (
+                String(item.owner_type ?? "").toLowerCase() === "customer" &&
+                item.user_id != null &&
+                item.admin_id == null &&
+                ["airtime_purchase", "data_purchase"].includes(
+                    String(item.transaction_type ?? "").toLowerCase()
+                ) &&
+                String(item.gateway ?? "").toLowerCase() === "gndata" &&
+                ["pending", "pending_requery"].includes(status) &&
+                Boolean(reference && String(reference).trim() && reference !== "—")
+            );
+        }
+
         function renderTransactions(items, targetId, limit = Infinity) {
             const target = document.getElementById(targetId);
             const visible = items.slice(0, limit);
@@ -903,10 +920,21 @@
                     `;
                 }
 
-                const action = canReconcileCustomerFunding(item)
-                    ? `<button type="button" data-reconcile-reference="${escapeHtml(transactionReference(item))}">Reconcile Funding</button>`
-                    : "—";
+                const actionParts = [];
 
+                if (canReconcileCustomerFunding(item)) {
+                    actionParts.push(
+                        `<button type="button" data-reconcile-reference="${escapeHtml(transactionReference(item))}">Reconcile Funding</button>`
+                    );
+                }
+
+                if (canReconcileGndataPurchase(item)) {
+                    actionParts.push(
+                        `<button type="button" data-provider-reconcile-reference="${escapeHtml(transactionReference(item))}">Reconcile GN Data</button>`
+                    );
+                }
+
+                const action = actionParts.length ? actionParts.join(" ") : "—";
                 return `
                     <tr>
                         <td>${escapeHtml(item.transaction_id ?? item.id ?? "—")}</td>
@@ -1293,6 +1321,73 @@ document.getElementById("transactionsTable").addEventListener(
         } catch (error) {
             showNotice(
                 `${error.message} Verify the transaction status before attempting reconciliation again.`
+            );
+
+            try {
+                await loadTransactions();
+            } catch {
+                // Keep the original error visible.
+            }
+        }
+    }
+);
+
+document.getElementById("transactionsTable").addEventListener(
+    "click",
+    async (event) => {
+        const button = event.target.closest("[data-provider-reconcile-reference]");
+        if (!button || button.disabled) return;
+
+        const reference = button.dataset.providerReconcileReference;
+
+        const providerReference = window.prompt(
+            "Enter the successful GN Data provider transaction reference:"
+        );
+
+        if (!providerReference || !providerReference.trim()) return;
+
+        const providerCostInput = window.prompt(
+            "Enter the GN Data provider cost in Naira (e.g. 79.56):"
+        );
+
+        if (providerCostInput === null || !providerCostInput.trim()) return;
+
+        const providerCost = Number(providerCostInput.trim());
+
+        if (!Number.isFinite(providerCost) || providerCost <= 0) {
+            showNotice("Enter a valid provider cost greater than zero.");
+            return;
+        }
+
+        if (!window.confirm(
+            `Confirm GN Data transaction ${reference} was successful?\n\n` +
+            `Provider reference: ${providerReference.trim()}\n` +
+            `Provider cost: ${formatMoney(providerCost)}\n\n` +
+            `This records the successful purchase only. It will NOT debit or credit the customer's wallet or submit another purchase. Continue?`
+        )) {
+            return;
+        }
+
+        button.disabled = true;
+        button.textContent = "Reconciling...";
+
+        try {
+            const result = await api(
+                `/admin/providers/gndata/reconcile/${encodeURIComponent(reference)}`,
+                {
+                    method: "POST",
+                    body: JSON.stringify({
+                        provider_transaction_id: providerReference.trim(),
+                        provider_cost: providerCost.toFixed(2)
+                    })
+                }
+            );
+
+            await loadTransactions();
+            showNotice(result.message || "GN Data transaction reconciled successfully.");
+        } catch (error) {
+            showNotice(
+                `${error.message} Check the transaction status before trying again.`
             );
 
             try {

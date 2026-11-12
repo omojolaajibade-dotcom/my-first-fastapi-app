@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="en">
 
 <head>
@@ -905,6 +905,15 @@ button:focus-visible {
         <p id="dataReceiptAmount"></p>
         <p id="dataReceiptReference"></p>
         <p id="dataReceiptMessage"></p>
+        <button
+    type="button"
+    id="checkDataStatusButton"
+    class="secondary-button"
+    style="display: none;"
+    onclick="checkDataPurchaseStatus()"
+>
+    Check Transaction Status
+</button>
 
         <button
             type="button"
@@ -919,6 +928,7 @@ button:focus-visible {
 
         let dataPurchaseInProgress = false;
         let dataPurchaseNeedsVerification = false;
+        let currentDataReceiptReference = "";
         let airtimePurchaseInProgress = false;
         let airtimePurchaseNeedsVerification = false;
 
@@ -1634,6 +1644,84 @@ function showDashboardFromData() {
 }
 
 
+async function checkDataPurchaseStatus() {
+    const button = document.getElementById("checkDataStatusButton");
+    const statusElement = document.getElementById("dataReceiptStatus");
+    const messageElement = document.getElementById("dataReceiptMessage");
+
+    if (!currentDataReceiptReference) {
+        messageElement.textContent = "Transaction reference is unavailable. Check your transaction history.";
+        return;
+    }
+
+    const token = localStorage.getItem("access_token");
+
+    if (!token) {
+        messageElement.textContent = "Please log in again to verify this transaction.";
+        return;
+    }
+
+    button.disabled = true;
+    button.textContent = "Checking...";
+
+    try {
+        const response = await fetch(
+            "/data/verify/" + encodeURIComponent(currentDataReceiptReference),
+            {
+                method: "POST",
+                headers: {
+                    "Authorization": "Bearer " + token,
+                    "Content-Type": "application/json"
+                }
+            }
+        );
+
+        const result = await response.json();
+
+        if (!response.ok) {
+            throw new Error(result.detail || "Unable to verify transaction.");
+        }
+
+        const rawStatus = String(result.status || "pending").toLowerCase();
+        const status = rawStatus === "pending_requery" ? "pending" : rawStatus;
+
+        statusElement.textContent = "Status: " + status;
+
+        if (status === "success") {
+            dataPurchaseNeedsVerification = false;
+            document.getElementById("dataReceiptTitle").textContent =
+                "Data purchased successfully!";
+            messageElement.textContent =
+                "Your data purchase has been confirmed successfully.";
+            button.style.display = "none";
+
+        } else if (status === "failed") {
+            dataPurchaseNeedsVerification = false;
+            document.getElementById("dataReceiptTitle").textContent =
+                "Purchase failed";
+            messageElement.textContent =
+                "The transaction was confirmed as failed. Check your wallet and transaction history.";
+            button.style.display = "none";
+
+        } else {
+            dataPurchaseNeedsVerification = true;
+            document.getElementById("dataReceiptTitle").textContent =
+                "Purchase status requires verification";
+            messageElement.textContent =
+                "The transaction is still awaiting confirmation. Do not repeat the purchase.";
+            button.style.display = "inline-block";
+        }
+
+    } catch (error) {
+        messageElement.textContent = error.message;
+
+    } finally {
+        button.disabled = false;
+        button.textContent = "Check Transaction Status";
+    }
+}
+
+
 
 function detectDataNetwork() {
     const phone = document.getElementById("dataPhone").value.trim();
@@ -1895,6 +1983,14 @@ async function buyData() {
                 dataPurchaseInProgress = false;
                 dataPurchaseNeedsVerification =
             status !== "success" && status !== "failed";
+            currentDataReceiptReference = result.reference || "";
+
+const checkButton = document.getElementById("checkDataStatusButton");
+
+checkButton.style.display =
+    dataPurchaseNeedsVerification && currentDataReceiptReference
+        ? "inline-block"
+        : "none";
         document.getElementById("dataReceiptTitle").textContent =
             status === "success"
                 ? "Data purchased successfully!"
