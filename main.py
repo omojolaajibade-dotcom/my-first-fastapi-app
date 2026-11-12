@@ -2798,7 +2798,16 @@ async def execute_gndata_purchase(
         )
         db.commit()
 
+   
     except GNDataError as exc:
+        logger.error(
+            "GN DATA ACTUAL DATA RESPONSE | "
+            "Reference=%s | HTTP=%s | Body=%s",
+            local_ref,
+            exc.status_code,
+            exc.response_body or "<EMPTY RESPONSE BODY>",
+        )
+
         if exc.is_definitive_rejection:
             logger.warning(
                 "GN Data definitively rejected data purchase %s; "
@@ -2829,6 +2838,7 @@ async def execute_gndata_purchase(
         )
         provider_status = PENDING_REQUERY
 
+        provider_status = PENDING_REQUERY
     if fallback_result is not None:
         result = fallback_result
     else:
