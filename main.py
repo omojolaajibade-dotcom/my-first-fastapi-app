@@ -143,9 +143,14 @@ RIDAMSUB_API_KEY = os.getenv("RIDAMSUB_API_KEY")
 
 RIDAMSUB_BASE_URL = "https://ridamsub.com"
 
-# VENDING: ENABLED FOR CONTROLLED LIVE TESTING.
+# VENDING: PROVIDER CONTROLS
 
 RIDAMSUB_PURCHASES_ENABLED = True
+
+AIRTIME_PURCHASES_ENABLED = (
+    os.getenv("AIRTIME_PURCHASES_ENABLED", "false").strip().lower()
+    in {"1", "true", "yes", "on"}
+)
 
 # These statuses must be confirmed against Ridamsub's
 
@@ -5564,6 +5569,11 @@ async def purchase_airtime(
     background_tasks: BackgroundTasks = None,
 
 ):
+    if not AIRTIME_PURCHASES_ENABLED:
+        raise HTTPException(
+            status_code=503,
+            detail="Airtime purchases are temporarily unavailable. Please try again later.",
+        )
 
 
     key = validate_idempotency_key(idempotency_key)
