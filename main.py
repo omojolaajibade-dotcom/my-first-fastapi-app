@@ -839,7 +839,7 @@ def normalize_gndata_status(response_json):
 
     value = value.strip().lower()
 
-    if value == "success":
+    if value in {"success", "delivered"}:
         return "success"
 
     if value in {"failed", "refund"}:
@@ -847,9 +847,6 @@ def normalize_gndata_status(response_json):
 
     # Pending and unknown responses remain unresolved.
     return PENDING_REQUERY
-
-
-
 
 
 
