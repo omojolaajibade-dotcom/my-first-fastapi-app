@@ -1194,42 +1194,64 @@ async def query_ridamsub_status(purchase_type, reference):
 
         return PENDING_REQUERY
 
+
 async def query_gndata_status(request_id):
-
-    """
-
-    Query GN Data transaction status only.
-    Never creates or repeats a purchase.
-    """
-
     if not isinstance(request_id, str) or not request_id.strip():
         return PENDING_REQUERY
 
+    request_id = request_id.strip()
+    client = GNDataClient()
+
     try:
-        client = GNDataClient()
-
-        response_json = await client.transaction_status(
-            request_id
-        )
-
+        response_json = await client.transaction_status(request_id)
         return normalize_gndata_status(response_json)
 
     except GNDataError:
         logger.exception(
-            "GN Data status query failed for request ID %s",
+            "GN Data individual status lookup failed for %s; "
+            "trying read-only transaction history.",
+            request_id,
+        )
+
+    try:
+        history = await client.transaction_history(
+            search=request_id,
+            limit=100,
+        )
+
+        if not isinstance(history, list):
+            logger.error("GN Data history returned an unexpected response.")
+            return PENDING_REQUERY
+
+        matches = [
+            item for item in history
+            if isinstance(item, dict)
+            and item.get("request_id") == request_id
+        ]
+
+        if len(matches) != 1:
+            logger.warning(
+                "GN Data history did not return exactly one matching "
+                "transaction for %s.",
+                request_id,
+            )
+            return PENDING_REQUERY
+
+        return normalize_gndata_status(matches[0])
+
+    except GNDataError:
+        logger.exception(
+            "GN Data history fallback failed for %s.",
             request_id,
         )
         return PENDING_REQUERY
 
     except Exception:
         logger.exception(
-            "Unexpected GN Data status query error for %s",
+            "Unexpected GN Data history fallback error for %s.",
             request_id,
         )
         return PENDING_REQUERY
-
-
-
 
 
 
