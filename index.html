@@ -1486,6 +1486,20 @@ async function buyAirtime() {
 
         const result = await response.json().catch(() => ({}));
 
+               if (
+            response.status === 503 &&
+            result.detail === "Airtime purchases are temporarily unavailable. Please try again later."
+        ) {
+            airtimePurchaseInProgress = false;
+            airtimePurchaseNeedsVerification = false;
+
+            message.textContent = result.detail;
+
+            if (button) button.disabled = false;
+
+            return;
+        }
+
         if (!response.ok) {
             throw new Error(
                 typeof result.detail === "string"
