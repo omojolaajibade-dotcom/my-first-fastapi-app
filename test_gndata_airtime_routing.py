@@ -8,6 +8,7 @@ os.environ["OMOTECH_SKIP_CREATE_ALL"] = "1"
 os.environ["GNDATA_API_KEY"] = "mock-only-test-credential"
 
 import main
+main.AIRTIME_PURCHASES_ENABLED = True
 
 
 REQUEST = main.AirtimePurchaseRequest(

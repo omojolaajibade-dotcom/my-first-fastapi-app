@@ -7,6 +7,13 @@ NETWORKS = {
     "9mobile": {"network_id": 29, "name": "9mobile"},
 }
 
+GN_DATA_AIRTIME_NETWORKS = {
+    "mtn": {"network_id": 14, "name": "MTN"},
+    "airtel": {"network_id": 15, "name": "Airtel"},
+    "glo": {"network_id": 16, "name": "Glo"},
+    "9mobile": {"network_id": 17, "name": "9mobile"},
+}
+
 # Format:
 # network_id|plan_id|name|type|validity|provider_cost|selling_price
 _RAW_PLANS = """

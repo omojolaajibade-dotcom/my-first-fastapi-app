@@ -155,7 +155,7 @@ try:
     assert transaction.gateway == "gndata"
     assert transaction.provider_cost is None
     assert client.calls == 1
-    assert client.last_kwargs["network_id"] == 26
+    assert client.last_kwargs["network_id"] == 14
     assert client.last_kwargs["amount"] == 100
     assert client.last_kwargs["phone"] == "08030000001"
 
@@ -392,6 +392,194 @@ try:
     assert user.wallet_balance == Decimal("1000.00")
 
     print("PASS: Definitive failure refunded exactly once.")
+
+finally:
+    db.close()
+    engine.dispose()
+
+
+# TEST 6 and 7: GN definitive rejection -> Ridamsub fallback
+
+class DefinitiveRejectGNClient:
+    enabled = True
+    api_key = "mock-only-test-credential"
+
+    def __init__(self):
+        self.calls = 0
+
+    async def purchase_airtime(self, **kwargs):
+        self.calls += 1
+        raise main.GNDataError(
+            "GN airtime endpoint rejected",
+            status_code=404,
+            response_body="Route not found",
+        )
+
+
+class FakeRidamsubResponse:
+    status_code = 200
+
+    def json(self):
+        return {
+            "status": "success",
+            "ident": "MOCK-RIDAMSUB-AIRTIME-001",
+        }
+
+
+class FakeRidamsubAsyncClient:
+    outcome = "success"
+    calls = []
+
+    def __init__(self, *args, **kwargs):
+        pass
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
+    async def post(self, url, headers=None, json=None):
+        type(self).calls.append({
+            "url": url,
+            "headers": headers,
+            "payload": json,
+        })
+
+        if type(self).outcome == "timeout":
+            raise RuntimeError("Simulated Ridamsub timeout")
+
+        return FakeRidamsubResponse()
+
+
+# TEST 6: Definitive GN rejection; Ridamsub succeeds
+
+print("\n--- TEST 6: GN rejection followed by Ridamsub success ---")
+
+engine, Session, db, user = setup_case(
+    "GN Airtime Ridamsub Fallback Customer"
+)
+gn_client = DefinitiveRejectGNClient()
+FakeRidamsubAsyncClient.outcome = "success"
+FakeRidamsubAsyncClient.calls = []
+
+try:
+    with (
+        patch.object(main, "GNDataClient", return_value=gn_client),
+        patch.object(main, "SessionLocal", Session),
+        patch.object(
+            main, "ridamsub_headers",
+            return_value={"Authorization": "Token mock-only"},
+        ),
+        patch.object(
+            main.httpx,
+            "AsyncClient",
+            FakeRidamsubAsyncClient,
+        ),
+    ):
+        result = asyncio.run(
+            main.execute_gndata_airtime_purchase(
+                db=db,
+                user_id=user.id,
+                network="mtn",
+                phone="08030000001",
+                amount=100,
+                idempotency_key="gn-airtime-fallback-success-001",
+            )
+        )
+
+    db.refresh(user)
+
+    transactions = db.query(
+        main.WalletTransaction
+    ).filter_by(user_id=user.id).all()
+
+    transaction = transactions[0]
+    ridamsub_request = FakeRidamsubAsyncClient.calls[0]
+
+    print("Result:", result)
+    print("Wallet:", user.wallet_balance)
+    print("Gateway:", transaction.gateway)
+    print("Transaction count:", len(transactions))
+    print("Ridamsub calls:", len(FakeRidamsubAsyncClient.calls))
+
+    assert gn_client.calls == 1
+    assert len(FakeRidamsubAsyncClient.calls) == 1
+    assert len(transactions) == 1
+    assert transaction.gateway == "ridamsub"
+    assert transaction.status == "success"
+    assert transaction.provider_transaction_id == "MOCK-RIDAMSUB-AIRTIME-001"
+    assert ridamsub_request["payload"]["request-id"] == transaction.reference
+    assert user.wallet_balance == Decimal("900.00")
+    assert transaction.provider_cost == Decimal("98.00")
+
+    print("PASS: Same transaction reused; one debit; Ridamsub success.")
+
+finally:
+    db.close()
+    engine.dispose()
+
+
+# TEST 7: Ridamsub timeout after definitive GN rejection
+
+print("\n--- TEST 7: Ridamsub fallback timeout ---")
+
+engine, Session, db, user = setup_case(
+    "GN Airtime Ridamsub Timeout Customer"
+)
+gn_client = DefinitiveRejectGNClient()
+FakeRidamsubAsyncClient.outcome = "timeout"
+FakeRidamsubAsyncClient.calls = []
+
+try:
+    with (
+        patch.object(main, "GNDataClient", return_value=gn_client),
+        patch.object(main, "SessionLocal", Session),
+        patch.object(
+            main, "ridamsub_headers",
+            return_value={"Authorization": "Token mock-only"},
+        ),
+        patch.object(
+            main.httpx,
+            "AsyncClient",
+            FakeRidamsubAsyncClient,
+        ),
+    ):
+        result = asyncio.run(
+            main.execute_gndata_airtime_purchase(
+                db=db,
+                user_id=user.id,
+                network="mtn",
+                phone="08030000001",
+                amount=100,
+                idempotency_key="gn-airtime-fallback-timeout-001",
+            )
+        )
+
+    db.refresh(user)
+
+    transactions = db.query(
+        main.WalletTransaction
+    ).filter_by(user_id=user.id).all()
+
+    transaction = transactions[0]
+
+    print("Result:", result)
+    print("Wallet:", user.wallet_balance)
+    print("Gateway:", transaction.gateway)
+    print("Transaction status:", transaction.status)
+    print("Transaction count:", len(transactions))
+    print("Ridamsub calls:", len(FakeRidamsubAsyncClient.calls))
+
+    assert gn_client.calls == 1
+    assert len(FakeRidamsubAsyncClient.calls) == 1
+    assert len(transactions) == 1
+    assert transaction.gateway == "ridamsub"
+    assert transaction.status == main.PENDING_REQUERY
+    assert result["status"] == main.PENDING_REQUERY
+    assert user.wallet_balance == Decimal("900.00")
+
+    print("PASS: Timeout remains pending; no second debit or refund.")
 
 finally:
     db.close()

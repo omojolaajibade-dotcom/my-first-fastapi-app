@@ -59,12 +59,12 @@ from config import RIDAMSUB_NETWORKS, RIDAMSUB_DATA_PLANS
 from providers.gndata import GNDataClient, GNDataError
 from providers.gndata_pricing import (
     NETWORKS as GN_DATA_NETWORKS,
+    GN_DATA_AIRTIME_NETWORKS,
     get_network_plans,
     get_plan,
     get_selling_price,
     validate_pricing,
 )
-
 
 
 from fastapi import Depends, FastAPI, HTTPException, Request, Query
@@ -2197,8 +2197,7 @@ async def execute_gndata_airtime_purchase(
         )
 
     network_key = str(network).strip().lower()
-    gn_network = GN_DATA_NETWORKS.get(network_key)
-
+    gn_network = GN_DATA_AIRTIME_NETWORKS.get(network_key)
     if not gn_network:
         raise HTTPException(
             status_code=400,
