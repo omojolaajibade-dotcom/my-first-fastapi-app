@@ -14,6 +14,22 @@ os.environ["GNDATA_API_KEY"] = "mock-only-test-credential"
 
 import main
 
+from security import decrypt_phone_number
+
+
+def assert_encrypted_airtime_recipient(transaction, expected_phone, expected_network):
+    assert transaction is not None
+    assert transaction.recipient_encrypted is not None
+    assert transaction.airtime_network == expected_network
+
+    assert expected_phone not in transaction.recipient_encrypted
+    assert decrypt_phone_number(
+        transaction.recipient_encrypted
+    ) == expected_phone
+
+    print("PASS: Recipient encrypted and recoverable.")
+    print("PASS: Airtime network saved correctly.")
+
 
 class FakeGNClient:
     enabled = True
@@ -152,6 +168,11 @@ try:
     assert user.wallet_balance == Decimal("900.00")
     assert transaction is not None
     assert transaction.status == "success"
+    assert_encrypted_airtime_recipient(
+    transaction,
+    "08030000001",
+    "mtn",
+)
     assert transaction.gateway == "gndata"
     assert transaction.provider_cost is None
     assert client.calls == 1
@@ -507,6 +528,11 @@ try:
     assert len(FakeRidamsubAsyncClient.calls) == 1
     assert len(transactions) == 1
     assert transaction.gateway == "ridamsub"
+    assert_encrypted_airtime_recipient(
+    transaction,
+    "08030000001",
+    "mtn",
+)
     assert transaction.status == "success"
     assert transaction.provider_transaction_id == "MOCK-RIDAMSUB-AIRTIME-001"
     assert ridamsub_request["payload"]["request-id"] == transaction.reference

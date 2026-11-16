@@ -84,7 +84,7 @@ class GNDataClient:
                     )
 
                 return result
-            
+
         except GNDataError:
             raise
 
@@ -289,12 +289,14 @@ class GNDataClient:
         if not isinstance(phone, str) or not phone.strip():
             raise GNDataError("Invalid recipient phone number.")
 
+
         return await self._post(
             "airtime/purchase",
             {
                 "phone": phone.strip(),
                 "amount": amount,
                 "id": network_id,
+                "idempotency_key": idempotency_key.strip(),
             },
             idempotency_key,
         )

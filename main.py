@@ -654,6 +654,10 @@ class WalletTransaction(Base):
 
     gateway = Column(String(30), nullable=True)
 
+    # Encrypted recipient and network for airtime reconciliation.
+    recipient_encrypted = Column(String(255), nullable=True)
+    airtime_network = Column(String(20), nullable=True)
+
 
 
      # Provider transaction tracking (Ridamsub and GN Data)
@@ -1631,6 +1635,20 @@ async def execute_ridamsub_purchase(
     )
 
 
+        # Store recipient metadata only for airtime purchases.
+    encrypted_recipient = None
+
+    if purchase_type == "airtime":
+        try:
+            encrypted_recipient = encrypt_phone_number(phone.strip())
+        except Exception:
+            logger.exception("Could not encrypt Ridamsub airtime recipient.")
+            raise HTTPException(
+                status_code=500,
+                detail="Unable to securely prepare airtime purchase.",
+            )
+
+
 
     local_ref = (
 
@@ -1743,29 +1761,21 @@ async def execute_ridamsub_purchase(
 
         user.wallet_balance = current_balance - final_amount
 
-
-
         tx = WalletTransaction(
-
             user_id=user_id,
-
             transaction_type=f"{purchase_type}_purchase",
-
             amount=final_amount,
-
             provider_cost=provider_cost,
-
             status="pending",
-
             reference=local_ref,
-
             gateway="ridamsub",
-
             idempotency_key=idempotency_key,
             request_fingerprint=request_fingerprint,
-
+            recipient_encrypted=encrypted_recipient,
+            airtime_network=(
+                network_key if purchase_type == "airtime" else None
+            ),
         )
-
 
 
         db.add(tx)
@@ -2263,6 +2273,16 @@ async def execute_gndata_airtime_purchase(
         gateway="gndata",
     )
 
+    # Encrypt recipient before reserving wallet funds.
+    try:
+        encrypted_recipient = encrypt_phone_number(phone.strip())
+    except Exception:
+        logger.exception("Could not encrypt GN airtime recipient.")
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to securely prepare airtime purchase.",
+        )
+
     local_ref = f"OMOTECH_AIRTIME_{secrets.token_hex(12)}"
 
     try:
@@ -2331,6 +2351,8 @@ async def execute_gndata_airtime_purchase(
             gateway="gndata",
             idempotency_key=idempotency_key,
             request_fingerprint=request_fingerprint,
+            recipient_encrypted=encrypted_recipient,
+            airtime_network=network_key,
         )
 
         db.add(transaction)
@@ -3277,7 +3299,7 @@ class AirtimePurchaseRequest(BaseModel):
 
     phone: str = Field(pattern=r"^0\d{10}$")
 
-    amount: Decimal = Field(ge=50, le=100000)
+    amount: Decimal = Field(ge=100, le=100000)
 
 
 
@@ -5594,6 +5616,24 @@ async def purchase_airtime(
         raise HTTPException(
             status_code=503,
             detail="Airtime purchases are temporarily unavailable. Please try again later.",
+        )
+
+    try:
+        airtime_amount = Decimal(str(request.amount))
+    except Exception:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid airtime amount.",
+        )
+
+    if (
+        not airtime_amount.is_finite()
+        or airtime_amount < Decimal("100")
+        or airtime_amount != airtime_amount.to_integral_value()
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="Minimum airtime purchase is ₦100. Enter a whole-number amount.",
         )
 
 
