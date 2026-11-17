@@ -1,4 +1,4 @@
-﻿import os
+import os
 
 
 
@@ -939,7 +939,7 @@ def resolve_purchase_amount(purchase_type, network, plan_id, amount):
                 detail="Invalid airtime amount.",
             )
 
-        if not result.is_finite() or result <= 0:
+        if not result.is_finite() or result < Decimal("100"):
             raise HTTPException(
                 status_code=400,
                 detail="Invalid airtime amount.",
@@ -2246,7 +2246,7 @@ async def execute_gndata_airtime_purchase(
 
     if (
         not final_amount.is_finite()
-        or final_amount <= 0
+        or final_amount < Decimal("100")
         or final_amount != final_amount.to_integral_value()
     ):
         raise HTTPException(
