@@ -6580,17 +6580,15 @@ async def paystack_webhook(
         raise
 
     except Exception:
-
         db.rollback()
-
-        raise HTTPException(
-
-            status_code=500,
-
-            detail="Unable to process Paystack webhook."
-
+        logger.exception(
+            "PAYSTACK WEBHOOK FAILED: reference=%s",
+            reference
         )
-
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to process Paystack webhook."
+        )
 
 
 
@@ -7374,17 +7372,17 @@ def verify_admin_wallet_funding(
         raise
 
     except Exception:
-
         db.rollback()
-
-        raise HTTPException(
-
-            status_code=500,
-
-            detail="Unable to process admin payment verification."
-
+        logger.exception(
+            "ADMIN WALLET VERIFICATION FAILED: reference=%s admin_id=%s",
+            reference,
+            current_admin.id
         )
-
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to process admin payment verification."
+        )
+    
 @app.post("/admin/wallet/reconcile-customer/{reference}")
 def reconcile_customer_paystack_funding(
     reference: str,
