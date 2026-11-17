@@ -584,12 +584,13 @@
                                     <th>Type</th>
                                     <th>Amount</th>
                                     <th>Status</th>
+                                    <th>Gateway</th>
                                     <th>Action</th>
                                 </tr>
                             </thead>
                             <tbody id="transactionsTable">
                                 <tr>
-                                    <td colspan="7" class="empty">Loading transactions...</td>
+                                    <td colspan="8" class="empty">Loading transactions...</td>
                                 </tr>
                             </tbody>
                         </table>
@@ -899,7 +900,7 @@
 
             if (!visible.length) {
                 target.innerHTML = renderEmpty(
-                    isRecent ? 5 : 7,
+                    isRecent ? 5 : 8,
                     "No transactions found."
                 );
                 return;
@@ -943,6 +944,7 @@
                         <td>${escapeHtml(transactionType(item))}</td>
                         <td>${escapeHtml(formatMoney(transactionAmount(item)))}</td>
                         <td><span class="${statusClass(status)}">${escapeHtml(status)}</span></td>
+                        <td>${escapeHtml(({gndata: "GN Data", ridamsub: "Ridamsub", paystack: "Paystack"})[String(item.gateway ?? "").trim().toLowerCase()] ?? item.gateway ?? "—")}</td>
                         <td>${action}</td>
                     </tr>
                 `;
