@@ -961,7 +961,12 @@ def resolve_purchase_amount(purchase_type, network, plan_id, amount):
 
 
 
-def apply_provider_result(reference, provider_status, gateway="ridamsub"):
+def apply_provider_result(
+    reference,
+    provider_status,
+    gateway="ridamsub",
+    provider_cost=None,
+):
 
     """
 
@@ -1036,15 +1041,21 @@ def apply_provider_result(reference, provider_status, gateway="ridamsub"):
             return {"status": PENDING_REQUERY}
 
 
-
         if provider_status == "success":
+
+            if gateway == "gndata" and tx.provider_cost is None:
+                reported_cost = extract_gndata_provider_cost(
+                    {"cost": provider_cost}
+                )
+
+                if reported_cost is not None:
+                    tx.provider_cost = reported_cost
 
             tx.status = "success"
 
             db.commit()
 
             return {"status": "success"}
-
 
 
         if provider_status != "failed":
@@ -1198,19 +1209,55 @@ async def query_ridamsub_status(purchase_type, reference):
 
         return PENDING_REQUERY
 
+def extract_gndata_provider_cost(response_json):
+    if not isinstance(response_json, dict):
+        return None
 
-async def query_gndata_status(request_id):
+    candidates = [response_json.get("cost")]
+
+    data = response_json.get("data")
+    if isinstance(data, dict):
+        candidates.append(data.get("cost"))
+
+    for value in candidates:
+        if value is None or isinstance(value, bool):
+            continue
+
+        try:
+            cost = Decimal(str(value))
+        except (TypeError, ValueError, ArithmeticError):
+            continue
+
+        if cost.is_finite() and cost > 0:
+            return cost.quantize(Decimal("0.01"))
+
+    return None
+
+
+async def query_gndata_status(request_id, include_cost=False):
     if not isinstance(request_id, str) or not request_id.strip():
-        return PENDING_REQUERY
+        return (
+    {"status": PENDING_REQUERY, "provider_cost": None}
+    if include_cost else PENDING_REQUERY
+)
 
     request_id = request_id.strip()
     client = GNDataClient()
 
     try:
         response_json = await client.transaction_status(request_id)
-        return normalize_gndata_status(response_json)
+        status = normalize_gndata_status(response_json)
+
+        if include_cost:
+            return {
+                "status": status,
+                "provider_cost": extract_gndata_provider_cost(response_json),
+            }
+
+        return status
 
     except GNDataError:
+
         logger.exception(
             "GN Data individual status lookup failed for %s; "
             "trying read-only transaction history.",
@@ -1239,23 +1286,41 @@ async def query_gndata_status(request_id):
                 "transaction for %s.",
                 request_id,
             )
-            return PENDING_REQUERY
 
-        return normalize_gndata_status(matches[0])
+            return (
+                 {"status": PENDING_REQUERY, "provider_cost": None}
+                if include_cost else PENDING_REQUERY
+            )
+
+        status = normalize_gndata_status(matches[0])
+
+        if include_cost:
+            return {
+                "status": status,
+                "provider_cost": extract_gndata_provider_cost(matches[0]),
+            }
+
+        return status
 
     except GNDataError:
         logger.exception(
             "GN Data history fallback failed for %s.",
             request_id,
         )
-        return PENDING_REQUERY
+        return (
+            {"status": PENDING_REQUERY, "provider_cost": None}
+            if include_cost else PENDING_REQUERY
+        )
 
     except Exception:
         logger.exception(
             "Unexpected GN Data history fallback error for %s.",
             request_id,
         )
-        return PENDING_REQUERY
+        return (
+             {"status": PENDING_REQUERY, "provider_cost": None}
+            if include_cost else PENDING_REQUERY
+        )
 
 
 
@@ -1302,15 +1367,17 @@ async def reconcile_pending_transaction(reference, expected_type, user_id=None):
         if not provider_request_id:
             return {"status": PENDING_REQUERY}
 
-        provider_status = await query_gndata_status(
-            provider_request_id
-        )
-        result = apply_provider_result(
-            reference,
-            provider_status,
-            gateway="gndata",
+        provider_result = await query_gndata_status(
+            provider_request_id,
+            include_cost=True,
         )
 
+        result = apply_provider_result(
+            reference,
+            provider_result["status"],
+            gateway="gndata",
+            provider_cost=provider_result["provider_cost"],
+        )
     else:
         logger.error(
             "Unsupported gateway %s for reference %s",
@@ -2374,6 +2441,7 @@ async def execute_gndata_airtime_purchase(
 
     provider_status = PENDING_REQUERY
     provider_reference = None
+    provider_cost = None
     fallback_result = None
 
     try:
@@ -2391,6 +2459,7 @@ async def execute_gndata_airtime_purchase(
         )
 
         provider_status = normalize_gndata_status(response_json)
+        provider_cost = extract_gndata_provider_cost(response_json)
 
         transaction.provider_transaction_id = (
             str(provider_reference) if provider_reference else None
@@ -2448,6 +2517,7 @@ async def execute_gndata_airtime_purchase(
             local_ref,
             provider_status,
             gateway="gndata",
+            provider_cost=provider_cost,
         )
 
     if result.get("status") == PENDING_REQUERY and background_tasks:
@@ -2831,6 +2901,7 @@ async def execute_gndata_purchase(
 
     provider_status = PENDING_REQUERY
     provider_reference = None
+    provider_cost = None
     fallback_result = None
 
     try:

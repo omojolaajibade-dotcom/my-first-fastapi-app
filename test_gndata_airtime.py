@@ -56,6 +56,7 @@ class FakeGNClient:
         return {
             "status": "success",
             "request_id": "MOCK-AIRTIME-001",
+            "cost": "98.00",
         }
 
 
@@ -174,7 +175,8 @@ try:
     "mtn",
 )
     assert transaction.gateway == "gndata"
-    assert transaction.provider_cost is None
+    db.refresh(transaction)
+    assert transaction.provider_cost == Decimal("98.00")
     assert client.calls == 1
     assert client.last_kwargs["network_id"] == 14
     assert client.last_kwargs["amount"] == 100
