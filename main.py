@@ -6539,26 +6539,43 @@ async def paystack_webhook(
 
 
 
-            db.add(
-
-                AdminAuditLog(
-
-                    admin_id=admin.id,
-
-                    user_id=None,
-
-                    action="admin_wallet_funding_completed",
-
-                    amount=transaction.amount,
-
-                    reason="Paystack webhook verified admin funding",
-
-                    reference=reference
-
-                )
-
+            audit_log = (
+                db.query(AdminAuditLog)
+                .filter(AdminAuditLog.reference == reference)
+                .with_for_update()
+                .first()
             )
 
+            if audit_log:
+                if (
+                    audit_log.admin_id != admin.id
+                    or audit_log.user_id is not None
+                    or Decimal(str(audit_log.amount))
+                    != Decimal(str(transaction.amount))
+                    or audit_log.action not in (
+                        "admin_wallet_funding_initialized",
+                        "admin_wallet_funding_completed"
+                    )
+                ):
+                    raise HTTPException(
+                        status_code=409,
+                        detail="Existing audit record does not match this funding transaction."
+                    )
+
+                audit_log.action = "admin_wallet_funding_completed"
+                audit_log.reason = "Paystack webhook verified admin funding"
+
+            else:
+                db.add(
+                    AdminAuditLog(
+                        admin_id=admin.id,
+                        user_id=None,
+                        action="admin_wallet_funding_completed",
+                        amount=transaction.amount,
+                        reason="Paystack webhook verified admin funding",
+                        reference=reference
+                    )
+                )
 
 
         # Commit wallet credit and transaction status together.
@@ -7319,26 +7336,43 @@ def verify_admin_wallet_funding(
 
 
 
-        db.add(
-
-            AdminAuditLog(
-
-                admin_id=current_admin.id,
-
-                user_id=None,
-
-                action="admin_wallet_funding_completed",
-
-                amount=transaction.amount,
-
-                reason="Paystack funding verified successfully",
-
-                reference=reference
-
-            )
-
+        audit_log = (
+            db.query(AdminAuditLog)
+            .filter(AdminAuditLog.reference == reference)
+            .with_for_update()
+            .first()
         )
 
+        if audit_log:
+            if (
+                audit_log.admin_id != current_admin.id
+                or audit_log.user_id is not None
+                or Decimal(str(audit_log.amount))
+                != Decimal(str(transaction.amount))
+                or audit_log.action not in (
+                    "admin_wallet_funding_initialized",
+                    "admin_wallet_funding_completed"
+                )
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail="Existing audit record does not match this funding transaction."
+                )
+
+            audit_log.action = "admin_wallet_funding_completed"
+            audit_log.reason = "Paystack funding verified successfully"
+
+        else:
+            db.add(
+                AdminAuditLog(
+                    admin_id=current_admin.id,
+                    user_id=None,
+                    action="admin_wallet_funding_completed",
+                    amount=transaction.amount,
+                    reason="Paystack funding verified successfully",
+                    reference=reference
+                )
+            )
 
 
         db.commit()
