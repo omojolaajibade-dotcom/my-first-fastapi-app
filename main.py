@@ -1,4 +1,4 @@
-import os
+﻿import os
 
 
 
@@ -647,6 +647,10 @@ class WalletTransaction(Base):
 
     amount = Column(Numeric(12, 2), nullable=False)
     provider_cost = Column(Numeric(12, 2), nullable=True)
+    # True only while this purchase amount is actually deducted from the wallet.
+    wallet_debited = Column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
 
     status = Column(String(20), nullable=False, default="pending")
 
@@ -961,6 +965,25 @@ def resolve_purchase_amount(purchase_type, network, plan_id, amount):
 
 
 
+def available_wallet_balance(db: Session, user_id: int, wallet_balance) -> Decimal:
+    """Return spendable balance after accounting for un-debited pending purchases."""
+    reserved = (
+        db.query(func.coalesce(func.sum(WalletTransaction.amount), 0))
+        .filter(
+            WalletTransaction.user_id == user_id,
+            WalletTransaction.transaction_type.in_(
+                ["airtime_purchase", "data_purchase"]
+            ),
+            WalletTransaction.status.in_(
+                ["pending", PENDING_REQUERY, "pending_requery"]
+            ),
+            WalletTransaction.wallet_debited.is_(False),
+        )
+        .scalar()
+    )
+    return Decimal(str(wallet_balance)) - Decimal(str(reserved or 0))
+
+
 def apply_provider_result(
     reference,
     provider_status,
@@ -974,9 +997,8 @@ def apply_provider_result(
 
 
 
-    A definitive failure and its refund are committed atomically.
-
-    Only a pending transaction can be refunded by this routine.
+    A confirmed success is debited once; a failure refunds only legacy
+    transactions that were already debited. New pending purchases are not charged.
 
     """
 
@@ -1043,76 +1065,71 @@ def apply_provider_result(
 
         if provider_status == "success":
 
+            # New purchases are charged only after confirmed provider success.
+            # Legacy pending transactions are already debited by the old flow.
+            if not tx.wallet_debited:
+                user = (
+                    db.query(User)
+                    .filter(User.id == tx.user_id)
+                    .with_for_update()
+                    .first()
+                )
+                if user is None:
+                    db.rollback()
+                    logger.error(
+                        "Debit blocked: customer missing for reference %s",
+                        reference,
+                    )
+                    return {"status": PENDING_REQUERY}
+
+                user.wallet_balance = (
+                    Decimal(str(user.wallet_balance)) - Decimal(str(tx.amount))
+                )
+                tx.wallet_debited = True
+
             if gateway == "gndata" and tx.provider_cost is None:
                 reported_cost = extract_gndata_provider_cost(
                     {"cost": provider_cost}
                 )
-
                 if reported_cost is not None:
                     tx.provider_cost = reported_cost
 
             tx.status = "success"
-
             db.commit()
-
-            return {"status": "success"}
+            return {"status": "success", "debited": True}
 
 
         if provider_status != "failed":
-
             db.rollback()
-
             return {"status": PENDING_REQUERY}
 
 
-
-        # Lock and credit the customer in the same transaction.
-
-        user = (
-
-            db.query(User)
-
-            .filter(User.id == tx.user_id)
-
-            .with_for_update()
-
-            .first()
-
-        )
-
-
-
-        if user is None:
-
-            db.rollback()
-
-            logger.error(
-
-                "Refund blocked: customer missing for reference %s",
-
-                reference,
-
+        # Refund only legacy/current transactions that were actually debited.
+        refunded = False
+        if tx.wallet_debited:
+            user = (
+                db.query(User)
+                .filter(User.id == tx.user_id)
+                .with_for_update()
+                .first()
             )
+            if user is None:
+                db.rollback()
+                logger.error(
+                    "Refund blocked: customer missing for reference %s",
+                    reference,
+                )
+                return {"status": PENDING_REQUERY}
 
-            return {"status": PENDING_REQUERY}
-
-
-
-        user.wallet_balance = (
-
-            Decimal(str(user.wallet_balance))
-
-            + Decimal(str(tx.amount))
-
-        )
+            user.wallet_balance = (
+                Decimal(str(user.wallet_balance)) + Decimal(str(tx.amount))
+            )
+            tx.wallet_debited = False
+            refunded = True
 
         tx.status = "failed"
-
-
-
         db.commit()
-
-        return {"status": "failed", "refunded": True}
+        return {"status": "failed", "refunded": refunded, "charged": False}
 
 
 
@@ -1810,7 +1827,9 @@ async def execute_ridamsub_purchase(
             return existing_result
 
 
-        current_balance = Decimal(str(user.wallet_balance))
+        current_balance = available_wallet_balance(
+            db, user_id, user.wallet_balance
+        )
 
 
 
@@ -1826,13 +1845,12 @@ async def execute_ridamsub_purchase(
 
 
 
-        user.wallet_balance = current_balance - final_amount
-
         tx = WalletTransaction(
             user_id=user_id,
             transaction_type=f"{purchase_type}_purchase",
             amount=final_amount,
             provider_cost=provider_cost,
+            wallet_debited=False,
             status="pending",
             reference=local_ref,
             gateway="ridamsub",
@@ -2398,21 +2416,21 @@ async def execute_gndata_airtime_purchase(
             db.rollback()
             return existing_result
 
-        if Decimal(str(user.wallet_balance)) < final_amount:
+        spendable_balance = available_wallet_balance(
+            db, user_id, user.wallet_balance
+        )
+        if spendable_balance < final_amount:
             raise HTTPException(
                 status_code=400,
                 detail="Insufficient wallet balance.",
             )
-
-        user.wallet_balance = (
-            Decimal(str(user.wallet_balance)) - final_amount
-        )
 
         transaction = WalletTransaction(
             user_id=user_id,
             transaction_type="airtime_purchase",
             amount=final_amount,
             provider_cost=None,
+            wallet_debited=False,
             status="pending",
             reference=local_ref,
             gateway="gndata",
@@ -2537,7 +2555,7 @@ async def execute_gndata_airtime_purchase(
             "Airtime purchase successful."
             if result.get("status") == "success"
             else (
-                "Airtime purchase failed. Your wallet has been refunded."
+                "Airtime purchase failed. Your wallet was not charged."
                 if result.get("status") == "failed"
                 else "Purchase is being verified. Do not retry."
             )
@@ -2860,21 +2878,21 @@ async def execute_gndata_purchase(
 
             return existing_result
 
-        if Decimal(str(user.wallet_balance)) < final_amount:
+        spendable_balance = available_wallet_balance(
+            db, user_id, user.wallet_balance
+        )
+        if spendable_balance < final_amount:
             raise HTTPException(
                 status_code=400,
                 detail="Insufficient wallet balance.",
             )
-
-        user.wallet_balance = (
-            Decimal(str(user.wallet_balance)) - final_amount
-        )
 
         transaction = WalletTransaction(
             user_id=user_id,
             transaction_type="data_purchase",
             amount=final_amount,
             provider_cost=provider_cost,
+            wallet_debited=False,
             status="pending",
             reference=local_ref,
             gateway="gndata",
@@ -3011,7 +3029,7 @@ async def execute_gndata_purchase(
             "Data purchase successful."
             if result.get("status") == "success"
             else (
-                "Data purchase failed. Your wallet has been refunded."
+                "Data purchase failed. Your wallet was not charged."
                 if result.get("status") == "failed"
                 else "Purchase is being verified. Do not retry."
             )
@@ -7682,7 +7700,7 @@ async def reconcile_gndata_purchase(
 ):
     """
     Manually reconcile an existing GN Data purchase using confirmed
-    provider evidence. This endpoint never changes the customer's wallet.
+    provider evidence and apply the one-time debit on confirmed success.
     """
     reference = str(reference or "").strip()
 
@@ -7802,6 +7820,25 @@ async def reconcile_gndata_purchase(
             + hashlib.sha256(reference.encode("utf-8")).hexdigest()[:32]
         )
 
+        # Apply the same success-only debit rule as automatic reconciliation.
+        if not transaction.wallet_debited:
+            customer = (
+                db.query(User)
+                .filter(User.id == transaction.user_id)
+                .with_for_update()
+                .first()
+            )
+            if customer is None:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Customer account is unavailable; transaction remains pending.",
+                )
+            customer.wallet_balance = (
+                Decimal(str(customer.wallet_balance))
+                - Decimal(str(transaction.amount))
+            )
+            transaction.wallet_debited = True
+
         transaction.provider_transaction_id = provider_transaction_id
         transaction.provider_cost = provider_cost
         transaction.status = "success"
@@ -7834,7 +7871,7 @@ async def reconcile_gndata_purchase(
 
         return {
             "status": "success",
-            "message": "GN Data purchase successfully reconciled. Customer wallet was not changed.",
+            "message": "GN Data purchase reconciled successfully. Customer wallet debited once.",
             "reference": transaction.reference,
             "provider_transaction_id": transaction.provider_transaction_id,
             "amount": float(transaction.amount),

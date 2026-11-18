@@ -456,7 +456,7 @@ try:
     print("Provider calls:", test5_client.calls)
 
     assert result["status"] == main.PENDING_REQUERY
-    assert test5_user.wallet_balance == Decimal("850.00")
+    assert test5_user.wallet_balance == Decimal("1000.00")
     assert transaction is not None
     assert transaction.status == main.PENDING_REQUERY
     assert test5_client.calls == 1

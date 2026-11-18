@@ -348,7 +348,7 @@ try:
     assert transaction is not None
     assert transaction.status == main.PENDING_REQUERY
     assert transaction.gateway == "gndata"
-    assert user.wallet_balance == Decimal("900.00")
+    assert user.wallet_balance == Decimal("1000.00")
     assert client.calls == 1
     assert transaction.provider_transaction_id is None
 
@@ -605,7 +605,7 @@ try:
     assert transaction.gateway == "ridamsub"
     assert transaction.status == main.PENDING_REQUERY
     assert result["status"] == main.PENDING_REQUERY
-    assert user.wallet_balance == Decimal("900.00")
+    assert user.wallet_balance == Decimal("1000.00")
 
     print("PASS: Timeout remains pending; no second debit or refund.")
 

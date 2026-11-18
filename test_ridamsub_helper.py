@@ -27,10 +27,12 @@ def make_fake_db():
         query.with_for_update.return_value = query
         query.order_by.return_value = query
         query.first.return_value = first_result
+        query.scalar.return_value = Decimal("0.00")
         return query
 
     db.query.side_effect = [
         make_query(user),
+        make_query(None),
         make_query(None),
     ]
 
