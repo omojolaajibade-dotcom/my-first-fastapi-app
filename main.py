@@ -1,4 +1,4 @@
-﻿import os
+import os
 
 
 
@@ -87,7 +87,7 @@ from sqlalchemy import (
 
     Column, DateTime, Integer, String, Boolean, Numeric,
 
-    create_engine, func, update
+    create_engine, func, update, or_
 
 )
 
@@ -1067,6 +1067,8 @@ def apply_provider_result(
 
             # New purchases are charged only after confirmed provider success.
             # Legacy pending transactions are already debited by the old flow.
+            balance_before = None
+            balance_after = None
             if not tx.wallet_debited:
                 user = (
                     db.query(User)
@@ -1082,9 +1084,11 @@ def apply_provider_result(
                     )
                     return {"status": PENDING_REQUERY}
 
+                balance_before = Decimal(str(user.wallet_balance))
                 user.wallet_balance = (
-                    Decimal(str(user.wallet_balance)) - Decimal(str(tx.amount))
+                    balance_before - Decimal(str(tx.amount))
                 )
+                balance_after = Decimal(str(user.wallet_balance))
                 tx.wallet_debited = True
 
             if gateway == "gndata" and tx.provider_cost is None:
@@ -1096,7 +1100,12 @@ def apply_provider_result(
 
             tx.status = "success"
             db.commit()
-            return {"status": "success", "debited": True}
+            return {
+                "status": "success",
+                "debited": True,
+                "balance_before": str(balance_before) if balance_before is not None else None,
+                "balance_after": str(balance_after) if balance_after is not None else None,
+            }
 
 
         if provider_status != "failed":
@@ -1106,6 +1115,8 @@ def apply_provider_result(
 
         # Refund only legacy/current transactions that were actually debited.
         refunded = False
+        balance_before = None
+        balance_after = None
         if tx.wallet_debited:
             user = (
                 db.query(User)
@@ -1121,15 +1132,23 @@ def apply_provider_result(
                 )
                 return {"status": PENDING_REQUERY}
 
+            balance_before = Decimal(str(user.wallet_balance))
             user.wallet_balance = (
-                Decimal(str(user.wallet_balance)) + Decimal(str(tx.amount))
+                balance_before + Decimal(str(tx.amount))
             )
+            balance_after = Decimal(str(user.wallet_balance))
             tx.wallet_debited = False
             refunded = True
 
         tx.status = "failed"
         db.commit()
-        return {"status": "failed", "refunded": refunded, "charged": False}
+        return {
+            "status": "failed",
+            "refunded": refunded,
+            "charged": False,
+            "balance_before": str(balance_before) if balance_before is not None else None,
+            "balance_after": str(balance_after) if balance_after is not None else None,
+        }
 
 
 
@@ -1816,10 +1835,21 @@ async def execute_ridamsub_purchase(
                 "transaction_type": existing_tx.transaction_type,
                 "amount": str(existing_tx.amount),
                 "status": existing_tx.status,
+                "network": network_key,
+                "phone": phone,
+                "plan_name": (
+                    next((str(p.get("name")) for p in RIDAMSUB_DATA_PLANS.get(network_key, [])
+                          if str(p.get("plan_id")) == str(plan_id)), "")
+                    if purchase_type == "data" else None
+                ),
+                "created_at": existing_tx.created_at.isoformat() if existing_tx.created_at else None,
+                # Historical balance snapshots are not stored; do not infer them.
+                "balance_before": None,
+                "balance_after": None,
                 "message": (
                     "This purchase request has already been recorded. "
                     "Do not submit it again."
-                 ),
+                ),
             }
 
             db.rollback()
@@ -2118,25 +2148,29 @@ async def execute_ridamsub_purchase(
 
 
     return {
-
         "reference": local_ref,
-
         "transaction_type": f"{purchase_type}_purchase",
-
         "amount": str(final_amount),
-
         "status": result.get("status", PENDING_REQUERY),
-
-        "message": (
-
-            "Purchase confirmed."
-
-            if result.get("status") == "success"
-
-            else "The transaction is being reconciled. Do not retry the purchase."
-
+        "network": network_key,
+        "phone": phone,
+        "plan_name": (
+            next((str(p.get("name")) for p in RIDAMSUB_DATA_PLANS.get(network_key, [])
+                  if str(p.get("plan_id")) == str(plan_id)), "")
+            if purchase_type == "data" else None
         ),
-
+        "created_at": tx.created_at.isoformat() if tx.created_at else None,
+        "balance_before": result.get("balance_before"),
+        "balance_after": result.get("balance_after"),
+        "message": (
+            "Purchase confirmed."
+            if result.get("status") == "success"
+            else (
+                "Transaction could not be completed at this time. Please contact support for assistance."
+                if result.get("status") == "failed"
+                else "The transaction is being reconciled. Do not retry the purchase."
+            )
+        ),
     }
 
 
@@ -2408,8 +2442,15 @@ async def execute_gndata_airtime_purchase(
 
             existing_result = {
                 "reference": existing.reference,
+                "transaction_type": existing.transaction_type,
                 "status": existing.status,
                 "amount": float(existing.amount),
+                "network": network_key,
+                "phone": phone,
+                "created_at": existing.created_at.isoformat() if existing.created_at else None,
+                # Historical balance snapshots are not persisted for replayed requests.
+                "balance_before": None,
+                "balance_after": None,
                 "message": "Existing transaction returned. Do not retry.",
             }
 
@@ -2548,14 +2589,19 @@ async def execute_gndata_airtime_purchase(
 
     return {
         "reference": local_ref,
-        "transaction_type": "airtime",
+        "transaction_type": "airtime_purchase",
         "amount": float(final_amount),
         "status": result.get("status", PENDING_REQUERY),
+        "network": network_key,
+        "phone": phone,
+        "created_at": transaction.created_at.isoformat() if transaction.created_at else None,
+        "balance_before": result.get("balance_before"),
+        "balance_after": result.get("balance_after"),
         "message": (
             "Airtime purchase successful."
             if result.get("status") == "success"
             else (
-                "Airtime purchase failed. Your wallet was not charged."
+                "Transaction could not be completed at this time. Please contact support for assistance."
                 if result.get("status") == "failed"
                 else "Purchase is being verified. Do not retry."
             )
@@ -2869,8 +2915,16 @@ async def execute_gndata_purchase(
 
             existing_result = {
                 "reference": existing.reference,
+                "transaction_type": existing.transaction_type,
                 "status": existing.status,
                 "amount": float(existing.amount),
+                "network": network_key,
+                "phone": phone,
+                "plan_name": str(plan.get("name", "")),
+                "created_at": existing.created_at.isoformat() if existing.created_at else None,
+                # Historical balance snapshots are not persisted for replayed requests.
+                "balance_before": None,
+                "balance_after": None,
                 "message": "Existing transaction returned. Do not retry.",
             }
 
@@ -3022,19 +3076,25 @@ async def execute_gndata_purchase(
 
     return {
         "reference": local_ref,
-        "transaction_type": "data",
+        "transaction_type": "data_purchase",
         "amount": float(final_amount),
         "status": result.get("status", PENDING_REQUERY),
-	 "message": (
+        "network": network_key,
+        "phone": phone,
+        "plan_name": str(plan.get("name", "")),
+        "created_at": transaction.created_at.isoformat() if transaction.created_at else None,
+        "balance_before": result.get("balance_before"),
+        "balance_after": result.get("balance_after"),
+        "message": (
             "Data purchase successful."
             if result.get("status") == "success"
             else (
-                "Data purchase failed. Your wallet was not charged."
+                "Transaction could not be completed at this time. Please contact support for assistance."
                 if result.get("status") == "failed"
                 else "Purchase is being verified. Do not retry."
             )
         ),
-}
+    }
 
 
 
@@ -6701,61 +6761,98 @@ async def paystack_webhook(
 
 
 
+def _safe_decrypt_transaction_recipient(encrypted_value):
+    if not encrypted_value:
+        return None
+    try:
+        return decrypt_phone_number(encrypted_value)
+    except Exception:
+        logger.warning("Could not decrypt a transaction recipient for customer history.")
+        return None
+
+
 @app.get("/transactions")
-
 def get_transactions(
-
+    q: str | None = Query(default=None, max_length=100),
+    limit: int = Query(default=20, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
     current_user: User = Depends(get_current_user),
-
-    db: Session = Depends(get_db)
-
+    db: Session = Depends(get_db),
 ):
-
-    transactions = (
-
-        db.query(WalletTransaction)
-
-        .filter(WalletTransaction.user_id == current_user.id)
-
-        .order_by(WalletTransaction.id.desc())
-
-        .all()
-
+    """Return the authenticated customer's transactions with search and pagination."""
+    base_query = db.query(WalletTransaction).filter(
+        WalletTransaction.user_id == current_user.id
     )
 
+    search_term = (q or "").strip()
+    if search_term:
+        filters = [WalletTransaction.reference.ilike(f"%{search_term}%")]
+        if search_term.isdigit():
+            filters.append(WalletTransaction.id == int(search_term))
+        base_query = base_query.filter(or_(*filters))
 
+    total = base_query.count()
+    transactions = (
+        base_query
+        .order_by(WalletTransaction.created_at.desc(), WalletTransaction.id.desc())
+        .offset(offset)
+        .limit(limit)
+        .all()
+    )
 
     return {
-
         "user_id": current_user.id,
-
         "transactions": [
-
             {
-
                 "transaction_id": transaction.id,
-
                 "transaction_type": transaction.transaction_type,
-
                 "amount": float(transaction.amount),
-
                 "status": transaction.status,
-
                 "reference": transaction.reference,
-
-                "gateway": transaction.gateway
-
-
-
+                "gateway": transaction.gateway,
+                "network": transaction.airtime_network,
+                "recipient": _safe_decrypt_transaction_recipient(transaction.recipient_encrypted),
+                "created_at": transaction.created_at.isoformat() if transaction.created_at else None,
             }
-
             for transaction in transactions
-
-        ]
-
+        ],
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+        "has_more": offset + len(transactions) < total,
     }
 
 
+@app.get("/transactions/{transaction_id}")
+def get_transaction_receipt(
+    transaction_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Return receipt details only when the transaction belongs to this customer."""
+    transaction = db.query(WalletTransaction).filter(
+        WalletTransaction.id == transaction_id,
+        WalletTransaction.user_id == current_user.id,
+    ).first()
+
+    if not transaction:
+        raise HTTPException(status_code=404, detail="Transaction not found.")
+
+    recipient = _safe_decrypt_transaction_recipient(
+        transaction.recipient_encrypted
+    )
+
+    return {
+        "transaction_id": transaction.id,
+        "transaction_type": transaction.transaction_type,
+        "amount": float(transaction.amount),
+        "status": transaction.status,
+        "reference": transaction.reference,
+        "gateway": transaction.gateway,
+        "network": transaction.airtime_network,
+        "recipient": recipient,
+        "created_at": transaction.created_at.isoformat() if transaction.created_at else None,
+    }
 
 
 

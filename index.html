@@ -283,6 +283,89 @@ button:focus-visible {
             font-size: 13px;
         }
 
+.recent-transaction-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 11px 0;
+    border-top: 1px solid #eef2f7;
+    font-size: 13px;
+}
+
+.recent-transaction-meta {
+    min-width: 0;
+    overflow-wrap: anywhere;
+}
+
+.recent-transaction-meta strong,
+.recent-transaction-meta span {
+    display: block;
+}
+
+.recent-transaction-meta span {
+    margin-top: 3px;
+    color: #64748b;
+}
+
+.transaction-action-button {
+    width: auto;
+    min-width: 88px;
+    padding: 8px 11px;
+    margin: 0;
+    font-size: 12px;
+    flex-shrink: 0;
+}
+
+.transaction-search {
+    display: flex;
+    gap: 8px;
+    margin: 16px 0;
+}
+
+.transaction-search input {
+    flex: 1;
+    min-width: 0;
+    margin: 0;
+}
+
+.transaction-search button {
+    width: auto;
+    margin: 0;
+    white-space: nowrap;
+}
+
+.transaction-pagination {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-top: 16px;
+}
+
+.transaction-pagination button {
+    width: auto;
+    margin: 0;
+}
+
+.transaction-receipt-details {
+    display: grid;
+    grid-template-columns: minmax(110px, 1fr) 2fr;
+    gap: 12px;
+    margin: 18px 0;
+    font-size: 14px;
+}
+
+.transaction-receipt-details dt {
+    color: #64748b;
+}
+
+.transaction-receipt-details dd {
+    margin: 0;
+    overflow-wrap: anywhere;
+    font-weight: 600;
+}
+
 .transaction-panel {
     margin: 24px 0;
     padding: 24px;
@@ -422,11 +505,12 @@ button:focus-visible {
     box-shadow: 0 6px 18px rgba(37, 99, 235, 0.18);
 }
 
-/* Buy Data: keep the form within the existing card width */
+/* Buy Data: match the centered desktop card width used by Buy Airtime */
 #dataCard {
-    width: 100%;
-    max-width: 100%;
+    width: calc(100% - 32px);
+    max-width: 420px;
     min-width: 0;
+    margin: 0 auto;
     box-sizing: border-box;
 }
 
@@ -447,6 +531,56 @@ button:focus-visible {
     font-size: 16px;
 }
 
+
+/* Clickable network tiles for Airtime and Data */
+.network-picker {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 10px;
+    margin: 10px 0 18px;
+}
+.network-option {
+    min-width: 0;
+    min-height: 82px;
+    border: 2px solid #e2e8f0;
+    border-radius: 12px;
+    background: #fff;
+    color: #1e293b;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    padding: 9px 5px;
+    cursor: pointer;
+    font-weight: 700;
+}
+.network-option[aria-pressed="true"] {
+    border-color: #2563eb;
+    background: #eff6ff;
+    box-shadow: 0 0 0 2px rgba(37,99,235,.12);
+}
+.network-logo {
+    width: 42px;
+    height: 42px;
+    border-radius: 11px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 14px;
+    font-weight: 900;
+    letter-spacing: -.5px;
+}
+.network-logo-mtn { background: #ffcc00; color: #111827; }
+.network-logo-airtel { background: #e11d48; color: #fff; }
+.network-logo-glo { background: #16a34a; color: #fff; }
+.network-logo-9mobile { background: #15803d; color: #fff; font-size: 11px; }
+.network-native-select { display: none !important; }
+@media (max-width: 420px) {
+    .network-picker { gap: 7px; }
+    .network-option { min-height: 74px; font-size: 12px; }
+    .network-logo { width: 36px; height: 36px; }
+}
     </style>
 </head>
 
@@ -746,7 +880,6 @@ button:focus-visible {
 </div>
 
 
-
 <a
     href="https://wa.me/2348162879275"
     target="_blank"
@@ -781,8 +914,14 @@ button:focus-visible {
     <h2>Buy Airtime</h2>
 
     <div id="airtimePurchaseForm">
-        <label for="airtimeNetwork">Select Network</label>
-        <select id="airtimeNetwork">
+        <label>Select Network</label>
+        <div class="network-picker" role="group" aria-label="Select airtime network">
+            <button type="button" class="network-option" data-network-picker="airtime" data-network="MTN" aria-pressed="false" onclick="selectPurchaseNetwork('airtime','MTN')"><span class="network-logo network-logo-mtn">MTN</span><span>MTN</span></button>
+            <button type="button" class="network-option" data-network-picker="airtime" data-network="Airtel" aria-pressed="false" onclick="selectPurchaseNetwork('airtime','Airtel')"><span class="network-logo network-logo-airtel">airtel</span><span>Airtel</span></button>
+            <button type="button" class="network-option" data-network-picker="airtime" data-network="Glo" aria-pressed="false" onclick="selectPurchaseNetwork('airtime','Glo')"><span class="network-logo network-logo-glo">Glo</span><span>Glo</span></button>
+            <button type="button" class="network-option" data-network-picker="airtime" data-network="9mobile" aria-pressed="false" onclick="selectPurchaseNetwork('airtime','9mobile')"><span class="network-logo network-logo-9mobile">9mobile</span><span>9mobile</span></button>
+        </div>
+        <select id="airtimeNetwork" class="network-native-select" aria-hidden="true" tabindex="-1">
             <option value="">Choose a network</option>
             <option value="MTN">MTN</option>
             <option value="Airtel">Airtel</option>
@@ -827,15 +966,14 @@ button:focus-visible {
         <p id="airtimeReceiptPhone"></p>
         <p id="airtimeReceiptAmount"></p>
         <p id="airtimeReceiptReference"></p>
+        <p id="airtimeReceiptCategory"></p>
+        <p id="airtimeReceiptType"></p>
+        <p id="airtimeReceiptBalanceBefore"></p>
+        <p id="airtimeReceiptBalanceAfter"></p>
+        <p id="airtimeReceiptDate"></p>
         <p id="airtimeReceiptMessage"></p>
-
-        <button
-            type="button"
-            class="secondary-button"
-            onclick="showDashboardFromAirtime()"
-        >
-            Back to Dashboard
-        </button>
+        <a id="airtimeReceiptReport" class="secondary-button" target="_blank" rel="noopener noreferrer">Report Transaction</a>
+        <button type="button" class="secondary-button" onclick="showTransactions()">Back to Transactions</button>
     </div>
 </div>
 
@@ -889,8 +1027,14 @@ button:focus-visible {
     <h2>Buy Data</h2>
 
     <div id="dataPurchaseForm">
-        <label for="dataNetwork">Select Network</label>
-        <select id="dataNetwork" onchange="loadDataPlans()">
+        <label>Select Network</label>
+        <div class="network-picker" role="group" aria-label="Select data network">
+            <button type="button" class="network-option" data-network-picker="data" data-network="MTN" aria-pressed="false" onclick="selectPurchaseNetwork('data','MTN')"><span class="network-logo network-logo-mtn">MTN</span><span>MTN</span></button>
+            <button type="button" class="network-option" data-network-picker="data" data-network="Airtel" aria-pressed="false" onclick="selectPurchaseNetwork('data','Airtel')"><span class="network-logo network-logo-airtel">airtel</span><span>Airtel</span></button>
+            <button type="button" class="network-option" data-network-picker="data" data-network="Glo" aria-pressed="false" onclick="selectPurchaseNetwork('data','Glo')"><span class="network-logo network-logo-glo">Glo</span><span>Glo</span></button>
+            <button type="button" class="network-option" data-network-picker="data" data-network="9mobile" aria-pressed="false" onclick="selectPurchaseNetwork('data','9mobile')"><span class="network-logo network-logo-9mobile">9mobile</span><span>9mobile</span></button>
+        </div>
+        <select id="dataNetwork" class="network-native-select" aria-hidden="true" tabindex="-1" onchange="loadDataPlans()">
             <option value="">Choose network</option>
             <option value="MTN">MTN</option>
             <option value="Airtel">Airtel</option>
@@ -913,9 +1057,9 @@ button:focus-visible {
         <button
             type="button"
             class="secondary-button"
-            onclick="showDashboardFromData()"
+            onclick="showTransactions()"
         >
-            Back to Dashboard
+            Back to Transactions
         </button>
     </div>
 
@@ -927,7 +1071,13 @@ button:focus-visible {
         <p id="dataReceiptPlan"></p>
         <p id="dataReceiptAmount"></p>
         <p id="dataReceiptReference"></p>
+        <p id="dataReceiptCategory"></p>
+        <p id="dataReceiptType"></p>
+        <p id="dataReceiptBalanceBefore"></p>
+        <p id="dataReceiptBalanceAfter"></p>
+        <p id="dataReceiptDate"></p>
         <p id="dataReceiptMessage"></p>
+        <a id="dataReceiptReport" class="secondary-button" target="_blank" rel="noopener noreferrer">Report Transaction</a>
         <button
     type="button"
     id="checkDataStatusButton"
@@ -1325,6 +1475,25 @@ function showDashboardFromWallet() {
     showOnlyScreen("dashboardCard");
 }
 
+function selectPurchaseNetwork(kind, network) {
+    const selectId = kind === "airtime" ? "airtimeNetwork" : "dataNetwork";
+    const select = document.getElementById(selectId);
+    if (!select) return;
+    select.value = network;
+    document.querySelectorAll(`[data-network-picker="${kind}"]`).forEach(button => {
+        button.setAttribute("aria-pressed", button.dataset.network === network ? "true" : "false");
+    });
+    if (kind === "data") {
+        loadDataPlans();
+    }
+}
+
+function syncNetworkPicker(kind, network) {
+    document.querySelectorAll(`[data-network-picker="${kind}"]`).forEach(button => {
+        button.setAttribute("aria-pressed", button.dataset.network === network ? "true" : "false");
+    });
+}
+
 function showAirtime() {
     const purchaseForm = document.getElementById("airtimePurchaseForm");
     const receipt = document.getElementById("airtimeReceipt");
@@ -1356,6 +1525,40 @@ function showDashboardFromAirtime() {
     showOnlyScreen("dashboardCard");
 }
 
+
+function formatPurchaseReceiptDate(value) {
+    const date = value ? new Date(value) : new Date();
+    if (Number.isNaN(date.getTime())) return "Date unavailable";
+    const parts = new Intl.DateTimeFormat("en-GB", {
+        day: "2-digit", month: "short", year: "numeric",
+        hour: "2-digit", minute: "2-digit", second: "2-digit",
+        hour12: false
+    }).formatToParts(date);
+    const part = name => parts.find(item => item.type === name)?.value || "";
+    return `${part("day")} ${part("month")} ${part("year")}, ${part("hour")}:${part("minute")}:${part("second")}`;
+}
+
+function formatPurchaseReceiptMoney(value) {
+    const amount = Number(value);
+    return value !== undefined && value !== null && Number.isFinite(amount)
+        ? "₦" + amount.toLocaleString("en-NG", {minimumFractionDigits: 2, maximumFractionDigits: 2})
+        : "Not available";
+}
+
+function buildPurchaseReportUrl(details) {
+    const body = [
+        "Transaction report.", "",
+        `Reference: ${details.reference || "Not available"}`,
+        `Amount: ${details.amount || "Not available"}`,
+        `Status: ${details.status || "pending"}`,
+        `Description: ${details.description || ""}`,
+        `Category: ${details.category || ""}`,
+        `Item: ${details.item || ""}`,
+        `Target: ${details.phone || ""}`,
+        `Date: ${details.date || ""}`
+    ].join("\n");
+    return "https://wa.me/2349061210773?text=" + encodeURIComponent(body);
+}
 
 async function buyAirtime() {
     if (airtimePurchaseInProgress || airtimePurchaseNeedsVerification) {
@@ -1448,42 +1651,34 @@ async function buyAirtime() {
 
     function displayAirtimeReceipt(status, result, receiptMessage) {
         airtimePurchaseInProgress = false;
-        airtimePurchaseNeedsVerification =
-            status !== "success" && status !== "failed";
+        airtimePurchaseNeedsVerification = status !== "success" && status !== "failed";
 
-        document.getElementById("airtimeReceiptTitle").textContent =
-            status === "success"
-                ? "Airtime purchased successfully!"
-                : status === "failed"
-                    ? "Purchase failed"
-                    : "Purchase status requires verification";
+        const amountValue = result.amount !== undefined ? result.amount : amount;
+        const amountText = formatPurchaseReceiptMoney(amountValue);
+        const item = `${network} Airtime`;
+        const title = `${item} - ${amountText} — ${status.toUpperCase()}`;
+        const dateText = formatPurchaseReceiptDate(result.created_at);
+        const messageText = status === "failed"
+            ? "Transaction could not be completed at this time. Please contact support for assistance."
+            : receiptMessage;
 
-        document.getElementById("airtimeReceiptStatus").textContent =
-            "Status: " + status;
-
-        document.getElementById("airtimeReceiptNetwork").textContent =
-            "Network: " + network;
-
-        document.getElementById("airtimeReceiptPhone").textContent =
-            "Phone: " + phone;
-
-        const receiptAmount = Number(
-            result.amount !== undefined ? result.amount : amount
-        );
-
-        document.getElementById("airtimeReceiptAmount").textContent =
-            Number.isFinite(receiptAmount)
-                ? "Amount: ₦" + receiptAmount.toLocaleString("en-NG", {
-                    minimumFractionDigits: 2,
-                    maximumFractionDigits: 2
-                })
-                : "Amount: Check transaction history";
-
-        document.getElementById("airtimeReceiptReference").textContent =
-            "Reference: " + (result.reference || "Not returned");
-
-        document.getElementById("airtimeReceiptMessage").textContent =
-            receiptMessage;
+        document.getElementById("airtimeReceiptTitle").textContent = title;
+        document.getElementById("airtimeReceiptStatus").textContent = "Status: " + status.toUpperCase();
+        document.getElementById("airtimeReceiptNetwork").textContent = "Network: " + network;
+        document.getElementById("airtimeReceiptPhone").textContent = "Recipient / Target: " + phone;
+        document.getElementById("airtimeReceiptAmount").textContent = "Amount: " + amountText;
+        document.getElementById("airtimeReceiptReference").textContent = "Reference: " + (result.reference || "Not returned");
+        document.getElementById("airtimeReceiptCategory").textContent = "Category: Airtime Purchase";
+        document.getElementById("airtimeReceiptType").textContent = "Transaction Type: Debit";
+        document.getElementById("airtimeReceiptBalanceBefore").textContent = "Balance Before: " + formatPurchaseReceiptMoney(result.balance_before);
+        document.getElementById("airtimeReceiptBalanceAfter").textContent = "Balance After: " + formatPurchaseReceiptMoney(result.balance_after);
+        document.getElementById("airtimeReceiptDate").textContent = "Date & Time: " + dateText;
+        document.getElementById("airtimeReceiptMessage").textContent = messageText;
+        document.getElementById("airtimeReceiptReport").href = buildPurchaseReportUrl({
+            reference: result.reference, amount: amountText, status,
+            description: messageText, category: "Airtime Purchase",
+            item, phone, date: dateText
+        });
 
         purchaseForm.classList.add("hidden");
         receipt.classList.remove("hidden");
@@ -1523,7 +1718,7 @@ async function buyAirtime() {
             return;
         }
 
-        if (!response.ok) {
+        if (!response.ok && String(result.status || "").toLowerCase() !== "failed") {
             throw new Error(
                 typeof result.detail === "string"
                     ? result.detail
@@ -1531,9 +1726,7 @@ async function buyAirtime() {
             );
         }
 
-        const status = String(
-            result.status || "pending"
-        ).toLowerCase();
+        const status = String(result.status || "pending").toLowerCase();
 
         if (status === "success") {
             displayAirtimeReceipt(
@@ -1775,6 +1968,7 @@ function detectDataNetwork() {
 
     if (!/^0\d{10}$/.test(number)) {
         networkSelect.value = "";
+        syncNetworkPicker("data", "");
         message.textContent = "";
         return;
     }
@@ -1802,6 +1996,7 @@ function detectDataNetwork() {
     for (const [network, prefixes] of Object.entries(networkPrefixes)) {
         if (prefixes.some(prefix => number.startsWith(prefix))) {
             networkSelect.value = network;
+            syncNetworkPicker("data", network);
             message.textContent =
                 "Likely network detected: " + network +
                 ". Please confirm before continuing.";
@@ -1810,6 +2005,7 @@ function detectDataNetwork() {
     }
 
     networkSelect.value = "";
+    syncNetworkPicker("data", "");
     message.textContent =
         "Network not recognised. Please select your network manually.";
 }
@@ -2017,51 +2213,40 @@ async function buyData() {
     let requestStarted = false;
 
     function displayReceipt(status, result, receiptMessage) {
-                dataPurchaseInProgress = false;
-                dataPurchaseNeedsVerification =
-            status !== "success" && status !== "failed";
-            currentDataReceiptReference = result.reference || "";
+        dataPurchaseInProgress = false;
+        dataPurchaseNeedsVerification = status !== "success" && status !== "failed";
+        currentDataReceiptReference = result.reference || "";
 
-const checkButton = document.getElementById("checkDataStatusButton");
+        const checkButton = document.getElementById("checkDataStatusButton");
+        checkButton.style.display = dataPurchaseNeedsVerification && currentDataReceiptReference ? "inline-block" : "none";
 
-checkButton.style.display =
-    dataPurchaseNeedsVerification && currentDataReceiptReference
-        ? "inline-block"
-        : "none";
-        document.getElementById("dataReceiptTitle").textContent =
-            status === "success"
-                ? "Data purchased successfully!"
-                : status === "failed"
-                    ? "Purchase failed"
-                    : "Purchase status requires verification";
+        const amountValue = result.amount;
+        const amountText = formatPurchaseReceiptMoney(amountValue);
+        const item = selectedPlan;
+        const title = `${item} - ${amountText} — ${status.toUpperCase()}`;
+        const dateText = formatPurchaseReceiptDate(result.created_at);
+        const messageText = status === "failed"
+            ? "Transaction could not be completed at this time. Please contact support for assistance."
+            : receiptMessage;
 
-        document.getElementById("dataReceiptStatus").textContent =
-            "Status: " + status;
-
-        document.getElementById("dataReceiptNetwork").textContent =
-            "Network: " + network;
-
-        document.getElementById("dataReceiptPhone").textContent =
-            "Phone: " + number;
-
-        document.getElementById("dataReceiptPlan").textContent =
-            "Plan: " + selectedPlan;
-
-        const amount = Number(result.amount);
-
-        document.getElementById("dataReceiptAmount").textContent =
-            result.amount !== undefined && Number.isFinite(amount)
-                ? "Amount: ₦" + amount.toLocaleString("en-NG", {
-                    minimumFractionDigits: 2,
-                    maximumFractionDigits: 2
-                })
-                : "Amount: Check transaction history";
-
-        document.getElementById("dataReceiptReference").textContent =
-            "Reference: " + (result.reference || "Not returned");
-
-        document.getElementById("dataReceiptMessage").textContent =
-            receiptMessage;
+        document.getElementById("dataReceiptTitle").textContent = title;
+        document.getElementById("dataReceiptStatus").textContent = "Status: " + status.toUpperCase();
+        document.getElementById("dataReceiptNetwork").textContent = "Network: " + network;
+        document.getElementById("dataReceiptPhone").textContent = "Recipient / Target: " + number;
+        document.getElementById("dataReceiptPlan").textContent = "Item: " + item;
+        document.getElementById("dataReceiptAmount").textContent = "Amount: " + amountText;
+        document.getElementById("dataReceiptReference").textContent = "Reference: " + (result.reference || "Not returned");
+        document.getElementById("dataReceiptCategory").textContent = "Category: Data Purchase";
+        document.getElementById("dataReceiptType").textContent = "Transaction Type: Debit";
+        document.getElementById("dataReceiptBalanceBefore").textContent = "Balance Before: " + formatPurchaseReceiptMoney(result.balance_before);
+        document.getElementById("dataReceiptBalanceAfter").textContent = "Balance After: " + formatPurchaseReceiptMoney(result.balance_after);
+        document.getElementById("dataReceiptDate").textContent = "Date & Time: " + dateText;
+        document.getElementById("dataReceiptMessage").textContent = messageText;
+        document.getElementById("dataReceiptReport").href = buildPurchaseReportUrl({
+            reference: result.reference, amount: amountText, status,
+            description: messageText, category: "Data Purchase",
+            item, phone: number, date: dateText
+        });
 
         purchaseForm.classList.add("hidden");
         receipt.classList.remove("hidden");
@@ -2095,7 +2280,7 @@ checkButton.style.display =
 
         const result = await response.json();
 
-        if (!response.ok) {
+        if (!response.ok && String(result.status || "").toLowerCase() !== "failed") {
             throw new Error(
                 getApiErrorMessage(
                     result.detail || result.message,
@@ -2104,9 +2289,7 @@ checkButton.style.display =
             );
         }
 
-        const status = String(
-            result.status || "pending"
-        ).toLowerCase();
+        const status = String(result.status || "pending").toLowerCase();
 
         if (status === "success") {
             displayReceipt(
@@ -2426,151 +2609,302 @@ if (password.length < 8) {
 
 
 
-async function loadTransactions() {
-    const section = document.getElementById("transactions-section");
+let transactionSearchTerm = "";
+let transactionOffset = 0;
+let transactionViewAll = false;
+const TRANSACTIONS_RECENT_SIZE = 5;
+const TRANSACTIONS_PAGE_SIZE = 20;
 
-    section.innerHTML = "";
+function formatTransactionDate(value) {
+    if (!value) return "Date unavailable";
+    const date = new Date(value);
+    return Number.isNaN(date.getTime())
+        ? "Date unavailable"
+        : date.toLocaleString("en-NG");
+}
+
+function formatTransactionAmount(value) {
+    return Number(value || 0).toLocaleString("en-NG", {
+        style: "currency",
+        currency: "NGN"
+    });
+}
+
+function transactionStatusClass(value) {
+    const status = String(value || "unknown").toLowerCase();
+    if (status === "success") return "status-success";
+    if (status === "failed") return "status-failed";
+    return "status-other";
+}
+
+async function loadTransactions(searchTerm = transactionSearchTerm, offset = transactionOffset) {
+    const section = document.getElementById("transactions-section");
+    section.replaceChildren();
     section.textContent = "Loading transactions...";
+    transactionSearchTerm = searchTerm;
+    transactionOffset = offset;
 
     try {
-        const response = await fetch("/transactions", {
-            headers: {
-                "Authorization":
-                    "Bearer " + localStorage.getItem("access_token")
-            }
+        const pageSize = transactionViewAll ? TRANSACTIONS_PAGE_SIZE : TRANSACTIONS_RECENT_SIZE;
+        const params = new URLSearchParams({
+            limit: String(pageSize),
+            offset: String(transactionOffset)
         });
+        if (transactionSearchTerm) params.set("q", transactionSearchTerm);
 
-        if (!response.ok) {
-            throw new Error("Could not load transactions.");
-        }
+        const response = await fetch("/transactions?" + params.toString(), {
+            headers: { "Authorization": "Bearer " + localStorage.getItem("access_token") }
+        });
+        if (!response.ok) throw new Error("Could not load transactions.");
 
         const data = await response.json();
         const transactions = data.transactions || [];
-
         section.replaceChildren();
 
         const wrapper = document.createElement("div");
         wrapper.className = "transaction-panel";
         document.getElementById("backFromTransactions").classList.remove("hidden");
+
         const heading = document.createElement("h2");
         heading.textContent = "Transaction History";
         wrapper.appendChild(heading);
 
         const subtitle = document.createElement("p");
         subtitle.className = "transaction-subtitle";
-        subtitle.textContent = "View your recent wallet transactions.";
+        subtitle.textContent = transactionViewAll
+            ? "Search by transaction reference or transaction ID. All transactions are shown 20 at a time."
+            : "Your 5 most recent transactions. Select View All to browse your complete history.";
         wrapper.appendChild(subtitle);
+
+        const searchForm = document.createElement("form");
+        searchForm.className = "transaction-search";
+        searchForm.addEventListener("submit", event => {
+            event.preventDefault();
+            const value = searchInput.value.trim();
+            transactionViewAll = true;
+            loadTransactions(value, 0);
+        });
+
+        const searchInput = document.createElement("input");
+        searchInput.type = "search";
+        searchInput.placeholder = "Enter transaction reference or ID";
+        searchInput.value = transactionSearchTerm;
+        searchInput.setAttribute("aria-label", "Search transaction reference or ID");
+
+        const searchButton = document.createElement("button");
+        searchButton.type = "submit";
+        searchButton.textContent = "Search";
+        searchForm.append(searchInput, searchButton);
+        wrapper.appendChild(searchForm);
 
         const count = document.createElement("p");
         count.className = "transaction-count";
-        count.textContent = transactions.length + " transaction(s)";
+        count.textContent = `${data.total || 0} matching transaction(s)`;
         wrapper.appendChild(count);
 
-        if (transactions.length === 0) {
-            const empty = document.createElement("p");
-            empty.className = "transaction-empty";
-            empty.textContent = "No transactions found yet.";
-            wrapper.appendChild(empty);
-            section.appendChild(wrapper);
-            return;
+        if (!transactionViewAll && !transactionSearchTerm && (data.total || 0) > TRANSACTIONS_RECENT_SIZE) {
+            const viewAllButton = document.createElement("button");
+            viewAllButton.type = "button";
+            viewAllButton.className = "transaction-action-button";
+            viewAllButton.textContent = "View All";
+            viewAllButton.addEventListener("click", () => showTransactions("", 0, true));
+            wrapper.appendChild(viewAllButton);
+        } else if (transactionViewAll) {
+            const recentButton = document.createElement("button");
+            recentButton.type = "button";
+            recentButton.className = "transaction-action-button";
+            recentButton.textContent = "Show 5 Recent Transactions";
+            recentButton.addEventListener("click", () => showTransactions("", 0, false));
+            wrapper.appendChild(recentButton);
         }
 
-        const tableWrapper = document.createElement("div");
-        tableWrapper.className = "transaction-table-wrapper";
+        if (!transactions.length) {
+            const empty = document.createElement("p");
+            empty.className = "transaction-empty";
+            empty.textContent = transactionSearchTerm
+                ? "No transactions match that reference or ID."
+                : "No transactions found yet.";
+            wrapper.appendChild(empty);
+        } else {
+            const tableWrapper = document.createElement("div");
+            tableWrapper.className = "transaction-table-wrapper";
+            const table = document.createElement("table");
+            table.className = "transaction-table";
+            const thead = document.createElement("thead");
+            const headerRow = document.createElement("tr");
 
-        const table = document.createElement("table");
-        table.className = "transaction-table";
-
-        const thead = document.createElement("thead");
-        const headerRow = document.createElement("tr");
-
-        ["Transaction", "Type", "Amount", "Status", "Reference"]
-            .forEach(function (label) {
+            ["Date", "Type", "Phone Number", "Amount", "Status", "Reference", "Receipt"].forEach(label => {
                 const th = document.createElement("th");
                 th.textContent = label;
                 headerRow.appendChild(th);
             });
+            thead.appendChild(headerRow);
+            table.appendChild(thead);
 
-        thead.appendChild(headerRow);
-        table.appendChild(thead);
+            const tbody = document.createElement("tbody");
+            transactions.forEach(transaction => {
+                const row = document.createElement("tr");
 
-        const tbody = document.createElement("tbody");
+                const dateCell = document.createElement("td");
+                dateCell.textContent = formatTransactionDate(transaction.created_at);
+                row.appendChild(dateCell);
 
-        transactions.forEach(function (transaction) {
-            const row = document.createElement("tr");
+                const typeCell = document.createElement("td");
+                typeCell.textContent = transaction.transaction_type || "N/A";
+                row.appendChild(typeCell);
 
-            const idCell = document.createElement("td");
-            idCell.textContent =
-                "#" + transaction.transaction_id;
-            row.appendChild(idCell);
+                const phoneCell = document.createElement("td");
+                const transactionType = String(transaction.transaction_type || "").toLowerCase();
+                phoneCell.textContent = transactionType.includes("airtime") || transactionType.includes("data")
+                    ? (transaction.recipient || "Not available")
+                    : "Not applicable";
+                row.appendChild(phoneCell);
 
-            const typeCell = document.createElement("td");
-            typeCell.textContent =
-                transaction.transaction_type || "N/A";
-            row.appendChild(typeCell);
+                const amountCell = document.createElement("td");
+                amountCell.className = "transaction-amount";
+                amountCell.textContent = formatTransactionAmount(transaction.amount);
+                row.appendChild(amountCell);
 
-            const amountCell = document.createElement("td");
-            amountCell.className = "transaction-amount";
-            amountCell.textContent = Number(transaction.amount)
-                .toLocaleString("en-NG", {
-                    style: "currency",
-                    currency: "NGN"
-                });
-            row.appendChild(amountCell);
+                const statusCell = document.createElement("td");
+                const status = document.createElement("span");
+                status.className = "transaction-status " + transactionStatusClass(transaction.status);
+                status.textContent = transaction.status || "unknown";
+                statusCell.appendChild(status);
+                row.appendChild(statusCell);
 
-            const statusCell = document.createElement("td");
-            const status = document.createElement("span");
-            const statusText = String(
-                transaction.status || "unknown"
-            );
+                const referenceCell = document.createElement("td");
+                referenceCell.className = "transaction-reference";
+                referenceCell.textContent = transaction.reference || "N/A";
+                row.appendChild(referenceCell);
 
-            status.className = "transaction-status " +
-                (statusText.toLowerCase() === "success"
-                    ? "status-success"
-                    : "status-other");
+                const receiptCell = document.createElement("td");
+                const receiptButton = document.createElement("button");
+                receiptButton.type = "button";
+                receiptButton.className = "transaction-action-button";
+                receiptButton.textContent = "View Receipt";
+                receiptButton.addEventListener("click", () => loadTransactionReceipt(transaction.transaction_id, "history"));
+                receiptCell.appendChild(receiptButton);
+                row.appendChild(receiptCell);
+                tbody.appendChild(row);
+            });
 
-            status.textContent = statusText;
-            statusCell.appendChild(status);
-            row.appendChild(statusCell);
+            table.appendChild(tbody);
+            tableWrapper.appendChild(table);
+            wrapper.appendChild(tableWrapper);
+        }
 
-            const referenceCell = document.createElement("td");
-            referenceCell.className = "transaction-reference";
-            referenceCell.textContent =
-                transaction.reference || "N/A";
-            row.appendChild(referenceCell);
+        if (transactionViewAll) {
+        const pagination = document.createElement("div");
+        pagination.className = "transaction-pagination";
+        const previous = document.createElement("button");
+        previous.type = "button";
+        previous.className = "secondary-button";
+        previous.textContent = "Previous";
+        previous.disabled = transactionOffset <= 0;
+        previous.addEventListener("click", () => loadTransactions(transactionSearchTerm, Math.max(0, transactionOffset - TRANSACTIONS_PAGE_SIZE)));
 
-            tbody.appendChild(row);
-        });
+        const pageLabel = document.createElement("span");
+        const currentPage = Math.floor(transactionOffset / TRANSACTIONS_PAGE_SIZE) + 1;
+        const totalPages = Math.max(1, Math.ceil((data.total || 0) / TRANSACTIONS_PAGE_SIZE));
+        pageLabel.textContent = `Page ${currentPage} of ${totalPages}`;
 
-        table.appendChild(tbody);
-        tableWrapper.appendChild(table);
-        wrapper.appendChild(tableWrapper);
+        const next = document.createElement("button");
+        next.type = "button";
+        next.textContent = "Next";
+        next.disabled = !data.has_more;
+        next.addEventListener("click", () => loadTransactions(transactionSearchTerm, transactionOffset + TRANSACTIONS_PAGE_SIZE));
+        pagination.append(previous, pageLabel, next);
+        wrapper.appendChild(pagination);
+        }
         section.appendChild(wrapper);
-
     } catch (error) {
-        section.textContent =
-            "Unable to load transactions. Please try again.";
+        section.textContent = "Unable to load transactions. Please try again.";
         console.error("Transaction history error:", error);
     }
 }
 
-function showTransactions() {
+async function loadTransactionReceipt(transactionId, source = "history") {
     showOnlyScreen("transactions-section");
-
+    document.getElementById("backFromTransactions").classList.remove("hidden");
     const section = document.getElementById("transactions-section");
-    section.classList.remove("hidden");
+    section.replaceChildren();
+    section.textContent = "Loading receipt...";
 
-    loadTransactions();
+    try {
+        const response = await fetch("/transactions/" + encodeURIComponent(transactionId), {
+            headers: { "Authorization": "Bearer " + localStorage.getItem("access_token") }
+        });
+        if (!response.ok) {
+            if (response.status === 404) throw new Error("Transaction not found.");
+            throw new Error("Unable to load this receipt.");
+        }
+        const transaction = await response.json();
+        section.replaceChildren();
+
+        const wrapper = document.createElement("div");
+        wrapper.className = "transaction-panel";
+        const heading = document.createElement("h2");
+        heading.textContent = "Transaction Receipt";
+        wrapper.appendChild(heading);
+
+        const status = document.createElement("p");
+        status.className = "transaction-status " + transactionStatusClass(transaction.status);
+        status.textContent = String(transaction.status || "unknown").toUpperCase();
+        wrapper.appendChild(status);
+
+        const details = document.createElement("dl");
+        details.className = "transaction-receipt-details";
+        const fields = [
+            ["Transaction ID", "#" + transaction.transaction_id],
+            ["Type", transaction.transaction_type || "Not available"],
+            ["Amount", formatTransactionAmount(transaction.amount)],
+            ["Network", transaction.network || "Not available"],
+            ["Recipient", transaction.recipient || "Not available"],
+            ["Date", formatTransactionDate(transaction.created_at)],
+            ["Reference", transaction.reference || "Not available"],
+            ["Provider", transaction.gateway || "Not available"]
+        ];
+        fields.forEach(([label, value]) => {
+            const term = document.createElement("dt");
+            term.textContent = label;
+            const description = document.createElement("dd");
+            description.textContent = value;
+            details.append(term, description);
+        });
+        wrapper.appendChild(details);
+
+        const back = document.createElement("button");
+        back.type = "button";
+        back.className = "secondary-button";
+        back.textContent = source === "dashboard" ? "Back to Dashboard" : "Back to Transaction History";
+        back.addEventListener("click", () => {
+            if (source === "dashboard") showDashboardFromTransactions();
+            else showTransactions(transactionSearchTerm, transactionOffset, transactionViewAll);
+        });
+        wrapper.appendChild(back);
+        section.appendChild(wrapper);
+        document.getElementById("backFromTransactions").classList.add("hidden");
+    } catch (error) {
+        section.textContent = error.message || "Unable to load this receipt.";
+        console.error("Transaction receipt error:", error);
+    }
 }
 
-
-
+function showTransactions(searchTerm = "", offset = 0, viewAll = false) {
+    transactionViewAll = viewAll;
+    showOnlyScreen("transactions-section");
+    const section = document.getElementById("transactions-section");
+    section.classList.remove("hidden");
+    document.getElementById("backFromTransactions").classList.remove("hidden");
+    loadTransactions(searchTerm, offset);
+}
 
 function showDashboardFromTransactions() {
     document.getElementById("transactions-section").replaceChildren();
     document.getElementById("backFromTransactions").classList.add("hidden");
     showOnlyScreen("dashboardCard");
 }
+
 
 
     </script>
