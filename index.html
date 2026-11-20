@@ -2861,8 +2861,7 @@ async function loadTransactionReceipt(transactionId, source = "history") {
             ["Network", transaction.network || "Not available"],
             ["Recipient", transaction.recipient || "Not available"],
             ["Date", formatTransactionDate(transaction.created_at)],
-            ["Reference", transaction.reference || "Not available"],
-            ["Provider", transaction.gateway || "Not available"]
+            ["Reference", transaction.reference || "Not available"]
         ];
         fields.forEach(([label, value]) => {
             const term = document.createElement("dt");

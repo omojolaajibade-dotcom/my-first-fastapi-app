@@ -1738,18 +1738,15 @@ async def execute_ridamsub_purchase(
     )
 
 
-        # Store recipient metadata only for airtime purchases.
-    encrypted_recipient = None
-
-    if purchase_type == "airtime":
-        try:
-            encrypted_recipient = encrypt_phone_number(phone.strip())
-        except Exception:
-            logger.exception("Could not encrypt Ridamsub airtime recipient.")
-            raise HTTPException(
-                status_code=500,
-                detail="Unable to securely prepare airtime purchase.",
-            )
+    # Store the recipient encrypted for both airtime and data purchases.
+    try:
+        encrypted_recipient = encrypt_phone_number(phone.strip())
+    except Exception:
+        logger.exception("Could not encrypt Ridamsub purchase recipient.")
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to securely prepare purchase recipient.",
+        )
 
 
 
@@ -1887,9 +1884,9 @@ async def execute_ridamsub_purchase(
             idempotency_key=idempotency_key,
             request_fingerprint=request_fingerprint,
             recipient_encrypted=encrypted_recipient,
-            airtime_network=(
-                network_key if purchase_type == "airtime" else None
-            ),
+            # Legacy column name retained; stores selected network for both
+            # airtime and data so customer history/receipts can display it.
+            airtime_network=network_key,
         )
 
 
@@ -2861,6 +2858,17 @@ async def execute_gndata_purchase(
 
 
 
+    # Encrypt recipient before creating the transaction. The same metadata
+    # is retained if this transaction later falls back to Ridamsub.
+    try:
+        encrypted_recipient = encrypt_phone_number(phone.strip())
+    except Exception:
+        logger.exception("Could not encrypt GN Data recipient.")
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to securely prepare purchase recipient.",
+        )
+
     client = GNDataClient()
 
     if not client.enabled:
@@ -2952,6 +2960,9 @@ async def execute_gndata_purchase(
             gateway="gndata",
             idempotency_key=idempotency_key,
             request_fingerprint=request_fingerprint,
+            recipient_encrypted=encrypted_recipient,
+            # Legacy column name retained; also stores data network.
+            airtime_network=network_key,
         )
 
         db.add(transaction)
@@ -6809,7 +6820,6 @@ def get_transactions(
                 "amount": float(transaction.amount),
                 "status": transaction.status,
                 "reference": transaction.reference,
-                "gateway": transaction.gateway,
                 "network": transaction.airtime_network,
                 "recipient": _safe_decrypt_transaction_recipient(transaction.recipient_encrypted),
                 "created_at": transaction.created_at.isoformat() if transaction.created_at else None,
@@ -6848,7 +6858,6 @@ def get_transaction_receipt(
         "amount": float(transaction.amount),
         "status": transaction.status,
         "reference": transaction.reference,
-        "gateway": transaction.gateway,
         "network": transaction.airtime_network,
         "recipient": recipient,
         "created_at": transaction.created_at.isoformat() if transaction.created_at else None,
